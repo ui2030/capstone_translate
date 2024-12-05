@@ -9,8 +9,10 @@ pip install paddleocr
 pip install easyocr
 pip install matplotlib 
 pip install paddle
+pip install dataset
+pip install accelerate
+
 
 pip install torch==2.0.0+cu117 torchvision==0.15.1+cu117 torchaudio==2.0.0+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
 
 pip install paddlepaddle==2.5.2 -f https://www.paddlepaddle.org.cn/whl/stable.html
-
