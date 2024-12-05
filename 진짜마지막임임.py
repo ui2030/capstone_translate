@@ -42,10 +42,12 @@ class TransparentWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
+        # 번역된 텍스트를 저장하는 리스트 초기화
+        self.translated_text = []  # 번역된 텍스트를 저장할 리스트
+
         # 스레드 제어 변수
         self.stop_thread = False
         self.model_loaded = False
-
         self.setWindowTitle("번역기")
         self.setGeometry(100, 100, 800, 600)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Window)
@@ -61,6 +63,7 @@ class TransparentWindow(QMainWindow):
         # 비동기 OCR 및 번역 스레드 실행 (UI 초기화 후)
         self.translation_thread = threading.Thread(target=self.run_asyncio_loop, daemon=True)
         self.translation_thread.start()
+        self.font_size = None
 
         # 타이핑 효과 관련 변수
         self.typing_index = 0
@@ -112,6 +115,45 @@ class TransparentWindow(QMainWindow):
         asyncio.set_event_loop(loop)
         loop.run_until_complete(self.capture_and_translate_async())
 
+        #이미 번역된 텍스트를 처리하는 함수
+    def is_text_already_translated(self, new_text, bbox):
+        # 번역된 텍스트가 존재하는지 확인
+        for translated_text, translated_bbox, _ in self.translated_text:
+            # 유사한 텍스트가 이미 번역된 경우
+            if difflib.SequenceMatcher(None, new_text, translated_text).ratio() > 0.9:
+                # bbox가 비슷한 경우(같은 텍스트일 가능성 있음)
+                if self.is_bbox_similar(bbox, translated_bbox):
+                    return True
+        return False
+
+    def is_bbox_similar(self, new_text, new_bbox, existing_texts, existing_bboxes, threshold=10):
+        """ 
+        새로운 텍스트와 bbox가 기존 텍스트 및 bbox와 유사한지 비교
+        텍스트 유사도 및 bbox 유사도 모두 고려.
+        """
+        for existing_text, existing_bbox in zip(existing_texts, existing_bboxes):
+            # 텍스트 유사도 비교
+            text_similarity = difflib.SequenceMatcher(None, new_text, existing_text).ratio()
+            
+            # bbox 유사도 비교 (bbox 위치와 크기를 비교)
+            x1, y1, x2, y2 = new_bbox
+            ex1, ey1, ex2, ey2 = existing_bbox
+            
+            # bbox 유사도를 비교: 비율 차이가 일정 범위 내에 있으면 유사하다고 판단
+            bbox_similarity = (
+                abs(x1 - ex1) < threshold and
+                abs(y1 - ey1) < threshold and
+                abs(x2 - ex2) < threshold and
+                abs(y2 - ey2) < threshold
+            )
+            
+            # 텍스트 유사도와 bbox 유사도를 결합하여 판단
+            if text_similarity > 0.9 and bbox_similarity:  # threshold를 0.9로 설정
+                return True
+        
+        return False
+
+
     async def capture_and_translate_async(self):
         while not self.stop_thread:
             if not self.model_loaded:
@@ -130,31 +172,18 @@ class TransparentWindow(QMainWindow):
                 # OCR 수행
                 ocr_results = self.perform_ocr_with_boxes(screenshot_np)
 
-                # OCR 결과 전처리: 특수기호 보정
-                processed_ocr_results = []
-                for text, bbox, font_size in ocr_results:
-                    corrected_text = re.sub(r'[^a-zA-Z0-9\s,.<>/?!@#$%^&*()\-_=+]', '', text)
-                    processed_ocr_results.append((corrected_text, bbox, font_size))
-
                 # 기존 번역된 텍스트 유지
                 if not hasattr(self, 'translated_text'):
                     self.translated_text = []
 
                 # 기존 번역된 텍스트에 있는 줄 수집
                 existing_lines = [item[0] for item in self.translated_text]
-                new_text_boxes = []
+                existing_bboxes = [item[1] for item in self.translated_text]
 
                 # 유사도를 기준으로 새로운 텍스트만 수집
-                def is_similar(new_text, existing_texts, threshold=0.9):
-                    for existing_text in existing_texts:
-                        similarity = difflib.SequenceMatcher(None, new_text, existing_text).ratio()
-                        if similarity > threshold:
-                            return True
-                    return False
-
-                # 새로운 텍스트 중 기존에 유사한 텍스트가 없는 경우만 번역
-                for text, bbox, font_size in processed_ocr_results:
-                    if text.strip() and not is_similar(text, existing_lines):
+                new_text_boxes = []
+                for text, bbox, font_size in ocr_results:  # 수정된 ocr_results 사용
+                    if text.strip() and not self.is_bbox_similar(text, bbox, existing_lines, existing_bboxes):
                         new_text_boxes.append((text, bbox, font_size))
 
                 if not new_text_boxes:
@@ -163,14 +192,23 @@ class TransparentWindow(QMainWindow):
                     continue
 
                 # 비동기 번역 작업 수행
-                for text, _, _ in new_text_boxes:
-                    translation = await self.async_translate_text(text)
-                    self.translated_text.append((translation, _, _))
+                tasks = [self.async_translate_text(text) for text, _, _ in new_text_boxes]
+                translations = await asyncio.gather(*tasks)
+
+                # 번역된 결과 저장 (기존 번역된 텍스트에 추가)
+                for idx, (text, bbox, font_size) in enumerate(new_text_boxes):
+                    adjusted_bbox = (
+                        bbox[0] + self.red_rect.x(),
+                        bbox[1] + self.red_rect.y(),
+                        bbox[2] + self.red_rect.x(),
+                        bbox[3] + self.red_rect.y()
+                    )
+                    self.translated_text.append((translations[idx], adjusted_bbox, font_size))
 
                 # 번역된 텍스트를 최신 상태로 반영
                 self.translated_text = [item for item in self.translated_text if item[0].strip()]
 
-                # 한 줄씩 번역을 표시하기 위해 타이핑을 시작
+                # 번역 결과를 화면에 반영
                 if self.translated_text:
                     self.typing_index = 0  # 번역된 텍스트 인덱스 초기화
                     self.current_line = ""  # 새로운 줄로 넘어가기
@@ -183,39 +221,48 @@ class TransparentWindow(QMainWindow):
 
             await asyncio.sleep(0.5)  # 너무 빠르게 반복되지 않도록 대기
 
-
     def update_typing(self):
         # 타이핑 애니메이션 구현
         if self.typing_index < len(self.translated_text):
             line, bbox, font_size = self.translated_text[self.typing_index]
             if len(self.current_line) < len(line):  # 아직 타이핑이 진행 중이면
                 self.current_line += line[len(self.current_line)]  # 한 글자씩 추가
-                QTimer.singleShot(50, self.update)  # 50ms 후에 다시 호출하여 타이핑 계속
+                QTimer.singleShot(30, self.update)  # 50ms 후에 다시 호출하여 타이핑 계속
             else:
                 # 한 줄이 끝나면 다음 줄로 넘어감
                 self.typing_index += 1
                 self.current_line = ""  # 다음 줄을 위해 current_line 초기화
                 if self.typing_index < len(self.translated_text):
-                    QTimer.singleShot(50, self.update)  # 다음 줄로 넘어가면서 타이핑 시작
+                    QTimer.singleShot(30, self.update)  # 다음 줄로 넘어가면서 타이핑 시작
                 else:
                     self.typing_timer.stop()  # 모든 텍스트가 타이핑되었으면 타이머를 멈춤
 
     def draw_translated_text(self, painter, text, bbox, font_size):
-        # 번역된 텍스트를 빨간색 박스 내부에만 그리도록 설정
+        # bbox의 값이 올바른지 확인하고, 글자 크기를 적절히 조정
+        if isinstance(bbox, tuple) and len(bbox) == 4:
+            left, top, right, bottom = bbox
+        else:
+            print(f"[ERROR] bbox 값이 예상과 다릅니다: {bbox}")
+            return
+
+        # 글자 크기와 DPI가 적절히 조정되었는지 확인
+        adjusted_font_size = max(10, font_size * self.device_pixel_ratio)  # 최소 크기를 10으로 설정
+        font = QFont("Arial", int(adjusted_font_size))  # 글자 크기 설정
+
         rect = QRect(
-            int(max(self.red_rect.left(), bbox[0] * self.device_pixel_ratio)),
-            int(max(self.red_rect.top(), bbox[1] * self.device_pixel_ratio)),
-            int(min(self.red_rect.width(), (bbox[2] - bbox[0]) * self.device_pixel_ratio)),
-            int(min(self.red_rect.height(), (bbox[3] - bbox[1]) * self.device_pixel_ratio))
+            int(max(self.red_rect.left(), left * self.device_pixel_ratio)),
+            int(max(self.red_rect.top(), top * self.device_pixel_ratio)),
+            int(min(self.red_rect.width(), (right - left) * self.device_pixel_ratio)),
+            int(min(self.red_rect.height(), (bottom - top) * self.device_pixel_ratio))
         )
 
-        # 글자 크기 유지
-        font = QFont("Arial", int(font_size * self.device_pixel_ratio))
-
-        painter.setBrush(QColor(200, 200, 200, 200))  # 텍스트 배경색
+        # 텍스트 배경색 설정
+        painter.setBrush(QColor(200, 200, 200, 200))  # 투명한 배경
         painter.setPen(Qt.NoPen)  # 테두리 없앰
-        painter.drawRoundedRect(rect, int(10 * self.device_pixel_ratio), int(10 * self.device_pixel_ratio))  # 둥근 직사각형 배경
-        painter.setPen(QPen(QColor(0, 0, 0), int(2 * self.device_pixel_ratio)))  # 글자 색과 테두리 설정
+        painter.drawRoundedRect(rect, int(10 * self.device_pixel_ratio), int(10 * self.device_pixel_ratio))
+
+        # 글자 색과 테두리 설정
+        painter.setPen(QPen(QColor(0, 0, 0), int(2 * self.device_pixel_ratio)))  # 글자 색, 테두리
         painter.setFont(font)  # 글자 크기 설정
         painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, text)  # 텍스트 출력
 
@@ -228,48 +275,60 @@ class TransparentWindow(QMainWindow):
             cleaned_img = cv2.morphologyEx(binary_img, cv2.MORPH_OPEN, kernel)  # 노이즈 제거
 
             # Tesseract OCR 사용 시도
-            try:
-                print("[INFO] Tesseract OCR 사용 시도 중...")
-                tesseract_result = pytesseract.image_to_data(
-                    cleaned_img, lang="eng+kor", output_type=pytesseract.Output.DICT
-                )
-                ocr_text_boxes = self.process_ocr_result_by_lines(tesseract_result)
-                if ocr_text_boxes:
-                    print("[INFO] Tesseract OCR이 텍스트를 감지했습니다.")
-                    return ocr_text_boxes
-            except Exception as e:
-                print(f"[ERROR] Tesseract OCR 실패: {e}")
+            print("[INFO] Tesseract OCR 사용 시도 중...")
+            tesseract_result = pytesseract.image_to_data(
+                cleaned_img, lang="eng+kor", output_type=pytesseract.Output.DICT
+            )
 
-            # 만약 모든 OCR 엔진이 실패한 경우
-            print("[ERROR] 모든 OCR 엔진이 실패했습니다.")
-            return []
+            # OCR 결과에서 텍스트와 bbox를 출력하여 점검
+            for i, text in enumerate(tesseract_result['text']):
+                print(f"OCR 텍스트: {text}, bbox: {tesseract_result['left'][i], tesseract_result['top'][i], tesseract_result['width'][i], tesseract_result['height'][i]}")
 
+            ocr_text_boxes = self.process_ocr_result_by_lines(tesseract_result)
+            if ocr_text_boxes:
+                print("[INFO] Tesseract OCR이 텍스트를 감지했습니다.")
+                return ocr_text_boxes
         except Exception as e:
-            return [(f"[ERROR] {str(e)}", (0, 0, 100, 50), 14)]
+            print(f"[ERROR] OCR 처리 중 오류 발생: {str(e)}")
+            return []
 
     def process_ocr_result_by_lines(self, ocr_result):
         """ Tesseract OCR 결과에서 단어를 줄 단위로 묶어서 반환 """
         ocr_text_boxes = []
         current_line = []
         previous_bottom = -1  # 이전 줄의 하단 위치
-        line_height_threshold = 10  # 줄 사이의 최대 허용 간격 (이 값을 통해 줄 구분)
+        line_height_threshold = 1  # 줄 사이의 최대 허용 간격 (이 값을 통해 줄 구분)
+        line_height_min_threshold = 10  # 글자 높이를 최소 기준으로 간격 설정
 
+        # Tesseract 결과에서 각 단어를 순차적으로 처리
         for i, text in enumerate(ocr_result["text"]):
-            if text.strip():
+            if text.strip():  # 비어 있지 않은 텍스트만 처리
                 left, top, width, height = ocr_result["left"][i], ocr_result["top"][i], ocr_result["width"][i], ocr_result["height"][i]
-                bottom = top + height
+                bottom = top + height  # 단어의 하단 위치
 
                 # 줄 구분 기준: 직전 줄과의 간격이 threshold 이상이면 새로운 줄로 구분
-                if previous_bottom != -1 and top - previous_bottom > line_height_threshold:
-                    if current_line:
-                        ocr_text_boxes.append(self.create_line_entry(current_line))
-                    current_line = []
-                current_line.append((text, left, top, width, height))
-                previous_bottom = bottom
+                if previous_bottom != -1:
+                    # 간격이 큰 경우에는 새로운 줄로 처리
+                    if top - previous_bottom > line_height_threshold:
+                        if current_line:
+                            ocr_text_boxes.append(self.create_line_entry(current_line))
+                        current_line = []  # 새로운 줄 시작
+
+                    # 작은 글자와 큰 글자 간에 구분을 두기 위한 최소 높이 기준을 추가
+                    elif height > line_height_min_threshold:
+                        current_line.append((text, left, top, width, height))  # 큰 글자 처리
+                    else:
+                        current_line.append((text, left, top, width, height))  # 작은 글자도 처리
+
+                else:
+                    # 첫 번째 단어는 항상 current_line에 추가
+                    current_line.append((text, left, top, width, height))
+
+                previous_bottom = bottom  # 현재 단어의 하단 위치 저장
 
         # 마지막 줄 처리
         if current_line:
-            ocr_text_boxes.append(self.create_line_entry(current_line))
+            ocr_text_boxes.append(self.create_line_entry(current_line))  # 마지막 줄 추가
 
         return ocr_text_boxes
 
@@ -286,38 +345,33 @@ class TransparentWindow(QMainWindow):
 
     async def async_translate_text(self, text):
         try:
-            # 특수 문자 감지
-            if re.search(r'[^\w\s]', text):
-                # 특수 문자가 포함된 경우, 번역하지 않고 그대로 반환
-                return text
-
-            # 출력 언어 설정
+            # 입력 언어 검지
+            src_lang_detected = detect(text)
+            src_lang_code = src_lang_detected if src_lang_detected in ["ko", "fr", "de", "zh", "en"] else "en"
+            
+            # 목표 언어 설정
             tgt_lang_code = {
-                "Korean": "ko",    # 한국어로 번역
-                "French": "fr",    # 프랑스어로 번역
-                "German": "de",    # 독일어로 번역
-                "Chinese": "zh",   # 중국어로 번역
-                "English": "en"    # 영어로 번역
-            }.get(self.combo.currentText(), "ko")  # 기본값을 'ko'로 설정 (한국어)
+                "Korean": "ko",
+                "French": "fr",
+                "German": "de",
+                "Chinese": "zh",
+                "English": "en"
+            }[self.combo.currentText()]  # 사용자 선택에 따른 목표 언어 설정
 
-            # 입력 언어 코드 (설정된 출력 언어로 설정)
-            src_lang_code = tgt_lang_code  # 입력 언어는 항상 출력 언어와 동일하게 설정
-
-            # 만약 입력 언어와 목표 언어가 같으면 번역하지 않고 그대로 반환
             if src_lang_code == tgt_lang_code:
-                return text
+                return text  # 입력 언어와 목표 언어가 같으면 번역하지 않음
 
-            # 중간 언어로 영어 설정
-            tokenizer.src_lang = src_lang_code  # 입력 언어 설정
+            # 입력 언어 설정
+            tokenizer.src_lang = src_lang_code
             inputs = tokenizer(text, return_tensors="pt").to(device)
             intermediate_tokens = model.generate(**inputs, forced_bos_token_id=tokenizer.get_lang_id("en"))
             intermediate_text = tokenizer.decode(intermediate_tokens[0], skip_special_tokens=True)
 
-            # 중간 영어 텍스트를 최종 언어로 번역
+            # 영어로 번역된 중간 텍스트를 최종 목표 언어로 번역
             tokenizer.src_lang = "en"  # 영어로 중간 번역
             inputs = tokenizer(intermediate_text, return_tensors="pt").to(device)
             generated_tokens = model.generate(**inputs, forced_bos_token_id=tokenizer.get_lang_id(tgt_lang_code))
-                
+
             return tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
         except Exception as e:
             return f"[ERROR] {str(e)}"
@@ -353,8 +407,11 @@ class TransparentWindow(QMainWindow):
                 self.draw_translated_text(painter, self.current_line, bbox, font_size)
 
     def closeEvent(self, event):
+        # 프로그램 종료 시 스레드를 종료할 수 있도록 설정
         self.stop_thread = True
+        self.translation_thread.join()  # 스레드 작업이 완료될 때까지 기다림
         event.accept()
+
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
