@@ -1,0 +1,11 @@
+# Cocktail — build/dev dependencies
+# 본 의존성은 requirements.txt 참고. 이 파일은 빌드/배포 도구만.
+
+-r requirements.txt
+
+# .exe 빌드
+pyinstaller>=6.6
+
+# Phase 2 PoC: UI Automation 탐색 (Apache 2.0)
+# uia_explore.py에서만 사용. 본 앱 의존성 X.
+uiautomation>=2.0

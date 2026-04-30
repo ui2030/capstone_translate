@@ -1,0 +1,43 @@
+# Cocktail Overlay Translator — runtime dependencies
+# 라이선스 정책: closed-source 상용 호환만 허용 (project_commercial_decisions.md 참고)
+
+# UI (LGPL — closed-source 상용 OK)
+PySide6>=6.6
+
+# 번역 모델 (Apache 2.0 / MIT)
+transformers>=4.40
+torch>=2.0
+sentencepiece>=0.2.0      # m2m100 + opus-mt 토크나이저 공통
+sacremoses>=0.1.1         # opus-mt (Marian) 토크나이저용
+
+# OCR — Tesseract 엔진은 별도 설치 (Apache 2.0)
+# Windows 설치: https://github.com/UB-Mannheim/tesseract/wiki
+# 한국어팩 (kor.traineddata): tessdata_fast 또는 tessdata_best 에서 다운
+pytesseract>=0.3.10
+Pillow>=10.0.0            # ImageGrab.grab — 화면 캡처
+
+# 선택 OCR 백엔드 — PP-OCRv5. 설치하면 앱에서 "PaddleOCRv5" 선택 가능.
+# 첫 사용 시 모델을 다운로드하므로 인터넷이 필요함.
+# paddlepaddle 설치는 CUDA/CPU 환경별 공식 설치 명령을 우선 확인할 것.
+# paddleocr>=3.0.0
+# paddlepaddle>=3.0.0
+# chardet<6                 # requests 경고 방지용(PaddleOCR 설치 후 chardet 7.x가 잡히는 경우)
+
+# 영상 처리
+opencv-python>=4.8.0
+numpy>=1.24
+
+# 언어 감지
+langdetect>=1.0.9
+
+# 글로벌 단축키 (Phase 1: 트레이 상주 시 어떤 창에서든 토글, MIT 라이선스)
+# Windows에선 일부 경우 관리자 권한 필요. 미설치 시 앱은 정상 동작 (단축키만 비활성).
+keyboard>=0.13.5
+
+# (선택) CTranslate2 가속 — 추후 패키징 단계에서 활용
+# ctranslate2>=4.0
+
+# (선택) UIA — Phase 2/3: 활성 창 텍스트 직접 추출 (Apache 2.0).
+# 미설치 시 ocr_combo의 "UIA" 옵션이 자동 비활성. 본 앱은 정상 동작.
+# 설치하면 Tesseract/Paddle 외에 UIA 모드를 ocr_combo에서 선택 가능.
+# uiautomation>=2.0

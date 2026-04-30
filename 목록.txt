@@ -1,22 +1,23 @@
-pip install numpy
-pip install PyQt5
-pip install transformers
-pip install langdetect
-pip install pillow
-pip install sentencepiece
-pip install pytesseract
-pip install paddleocr
-pip install easyocr
-pip install matplotlib 
-pip install paddle
-pip install dataset
-pip install accelerate
-conda install -c conda-forge "pyqt<6"
+numpy
+PyQt5
+transformers
+langdetect
+pillow
+sentencepiece
+pytesseract
+paddleocr
+easyocr
+matplotlib
+paddle
+dataset
+accelerate
+torch==2.0.0+cu117
+torchvision==0.15.1+cu117
+torchaudio==2.0.0+cu117
+paddlepaddle==2.5.2
 
-conda install -c conda-forge "transformers>=4.42" "sentencepiece>=0.1.99" "safetensors"
-
-pip install torch==2.0.0+cu117 torchvision==0.15.1+cu117 torchaudio==2.0.0+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
-
-pip install paddlepaddle==2.5.2 -f https://www.paddlepaddle.org.cn/whl/stable.html
+# 선택(권장): CTranslate2 백엔드 — GPU ~2-3×, CPU ~3-4× 추가 가속
+# 변환: ct2-transformers-converter --model facebook/nllb-200-distilled-600M --output_dir ./nllb_ct2 --quantization int8
+ctranslate2
 
 
