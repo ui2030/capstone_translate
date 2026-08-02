@@ -17,8 +17,8 @@
 - [ ] 예외 발생 시 `stop_thread=True`로 전체 루프를 죽이지 않는가? (continue가 정답)
 - [ ] 중복 dedup 시 OCR 원문 vs OCR 원문을 비교하는가? (번역문과 비교 X)
 - [ ] 언어 코드를 만질 때 `LANG_MAP` + `_LANGDETECT_TO_ISO` + `M2M100_LANGS` + 콤보박스 4곳을 동시에 확인했는가?
-- [ ] auto 언어 감지는 `identify_language()`의 Unicode script fast-path를 먼저 타는가? (비라틴을 langdetect에 맡기지 말 것) — M-6
-- [ ] 다국어 auto 번역은 라인 단독 감지가 아니라 bbox region smoothing을 적용하는가? — M-7
+- [ ] auto 라인 언어는 `identify_language()`의 Unicode script 판정 **만** 쓰는가? 라틴/불명을 추측(langdetect·region 투표·지배 언어 스냅)하지 말 것 — SL-1 (M-6/M-7/LG-1 대체)
+- [ ] 언어 추측 장치를 되살리려면 errors.md SL-1의 '복원 조건'을 먼저 확인했는가? — SL-1
 - [ ] CT2 hypothesis에서 첫 토큰(언어 토큰)을 잘라냈는가?
 - [ ] PIL ImageGrab 결과를 cv2에 넘길 때 `cv2.COLOR_RGB2GRAY` (BGR 아님) 인가?
 - [ ] paintEvent에서 bbox를 red_rect에 클립할 때 `QRect.intersected()`를 쓰는가? (left만 보정 후 원본 width로 그리지 말 것)
@@ -33,15 +33,46 @@
 - [ ] 추가/교체하는 모델/라이브러리의 라이선스가 상용 호환인가? (NLLB CC-BY-NC, PyQt5 GPL 금지) — M-5/E-10
 - [ ] 모델은 lazy load 인가? (import 시점에 동기 로드 금지, UI는 즉시 떠야 함) — P-9
 - [ ] 등록된 언어쌍은 opus-mt(전용), 그 외는 m2m100(폴백)으로 라우팅 되는가? — M-5
+- [ ] opus-mt sepvoc 모델의 **입력**은 `source.spm`으로 인코딩하는가? (AutoTokenizer는 타깃 vocab으로 인코딩해 `<unk>` 범벅) — M-8
 - [ ] 시그널/슬롯 데코레이터가 PySide6 Signal/Slot인가? (PyQt5 pyqtSignal/pyqtSlot 흔적 없음) — E-10
 - [ ] OCR 언어가 하드코딩(`"eng+kor"`)이 아니라 사용자 src 콤보에 따라 동적 결정되는가? — B-14
 - [ ] 사용 가능한 traineddata를 시작 시 진단(`pytesseract.get_languages()`)했는가? — B-14
 - [ ] 배포 빌드(.exe)에서 `./tessdata/` 가 있으면 `TESSDATA_PREFIX` 자동 설정되는가? — 인스톨러 호환
 - [ ] PaddleOCRv5는 optional lazy import인가? 설치/초기화 실패 시 Tesseract 폴백이 있는가? — O-1
 - [ ] 일반 사용자 환경 문제가 앱 시작 예외가 아니라 UI 상태 라벨/진단 스크립트로 드러나는가? — U-1
+- [ ] 기본 캡처 모드는 비전 V-1에 맞춰 `MODE_WINDOW`(활성 창)인가? — UX-1
+- [ ] auto OCR 언어가 `eng+kor` 고정인가? (`OCR_LANGS_AUTO_DEFAULT`, `COCKTAIL_OCR_LANGS_AUTO` 오버라이드 가능) — UX-1 / SL-1
+- [ ] OverlayWindow 빨간 박스는 `MODE_BOX`일 때만 그리는가? — UX-1
+- [ ] `self.capturable=True`(스샷OK) + 번역 동작 동시 시 자동 일시 중지 + 사용자 경고 표시되는가? — B-15
+- [ ] mode_combo 표시와 `self.capture_mode` 초기값이 일치하는가? (init에서 명시 동기화) — UX-1 자체 리뷰
+- [ ] auto OCR 경로에 OSD(`pytesseract.image_to_osd`) 호출이 **없는가**? (script 오판 → 쓰레기 OCR) — SL-1 (UX-2 Layer 3-5 퇴역)
+- [ ] 활성 창 모드 + UIA 사용 가능 + ocr_combo 기본값일 때 UIA 우선 시도, 실패 시 OCR 폴백 자동 라우팅 작동하는가? — UX-2
+- [ ] OCR 영역이 화면 가시 영역(primary screen)으로 클립되는가? — UX-2
+- [ ] mutable 클래스 변수 X, 인스턴스 변수(`self._...`)인가? — UX-2 자체 리뷰
 - [ ] 트레이 상주 시 closeEvent는 hide()로 가고, 진짜 종료는 별도 경로(`_is_quitting` 플래그 등)인가? — T-1
+- [ ] QApplication/settings/overlay 생성은 `CocktailAppController` 한 곳에서 관리되는가? `__main__`에 직접 생성 코드를 흩뿌리지 말 것 — BG-2
 - [ ] `keyboard` 같은 글로벌 단축키 라이브러리는 optional 처리 + 시그널/슬롯으로 메인 스레드 진입하는가? — T-1
 - [ ] 캡처 모드 추가 시 `_update_red_rect_for_mode()`로 red_rect를 갱신해 기존 OCR/렌더링 파이프라인을 재사용하는가? — T-2
+- [ ] 캡처 모드/hover/red_rect 상태는 `CaptureRegionController`가 소유하는가? settings panel resize/initUI가 직접 캡처 영역을 만들지 말 것 — BG-3
+- [ ] 워커 / 엔진 시그널 / OCR/UIA 라우팅 / 모델 lifecycle / 캐시 타이머는 `BackgroundController`가 소유하는가? `TransparentWindow`에 잔재가 남으면 안 됨 — BG-4
+- [ ] `BackgroundController` 생성 시 `region`, `options_provider`, `is_self_hwnd` 3개 의존만 주입했는가? widget 직접 참조 금지 — BG-4
+- [ ] 콤보 상태는 매 iteration마다 `RuntimeOptions(@dataclass(frozen=True))` 스냅샷으로 워커가 읽는가? — BG-4
+- [ ] forward-ref가 필요한 어노테이션(예: TransparentWindow에서 RuntimeOptions 참조)은 문자열로 처리했는가? — BG-4 자체 리뷰
+- [ ] `red_rect`는 화면 절대 좌표인가? `owner.geometry()` / `region.owner.geometry()` 변환 코드가 잔재로 남으면 안 됨 — BG-5
+- [ ] OverlayWindow MODE_BOX 그리기는 settings 창 위치(`ctl.geometry().x()`)에 의존하지 않는가? `rect.x() - wx`만 사용 — BG-5
+- [ ] AST 헬퍼(`_method`)는 `async def`(AsyncFunctionDef)도 처리하는가? `capture_and_translate_async` 같은 코루틴 검사 시 필요 — BG-5 자체 리뷰
+- [ ] settings UI 클래스 이름은 `SettingsWindow`인가? (`TransparentWindow`는 BG-6에서 리네이밍 완료) — BG-6
+- [ ] `CaptureRegionController.__init__`는 `is_self_hwnd` 콜백 시그니처인가? owner 위젯 직접 참조 금지 — BG-6
+- [ ] `region.foreground_window_rect`는 `self._is_self_hwnd(int(hwnd))` 콜백을 사용하는가? `self.owner.winId()` 직접 호출 금지 — BG-6
+- [ ] `SettingsWindow`에 빈 `paintEvent` override가 잔재로 남으면 안 됨 (Qt 기본이 자동 처리) — BG-6
+- [ ] 분리 사이클(BG-1~BG-6) 완료 후 새 책임을 추가할 땐 어느 컴포넌트(SettingsWindow/BackgroundController/CaptureRegionController/OverlayWindow/CocktailAppController)인지 ARCHITECTURE.md를 먼저 갱신했는가?
+- [ ] MODE_BOX 영역 박스를 마우스로 편집할 진입점이 SettingsWindow + 트레이 메뉴에 모두 존재하는가? — BG-7
+- [ ] `RegionEditor`는 가상 데스크톱 전체 frameless/translucent/always-on-top 위젯이고, 내부 박스 상태는 처음부터 절대 좌표인가? (BG-5 좌표계 결정과 일관) — BG-7
+- [ ] `RegionEditor` 위젯 자체에 `set_window_capture_affinity(self.winId(), exclude=True)`가 적용됐는가? (B-10 자기 캡처 피드백 차단) — BG-7
+- [ ] `SettingsWindow._is_self_hwnd`가 `region_editor.winId`도 자기 hwnd로 인식하여 worker가 편집 창을 캡처/번역 시도하지 않는가? — BG-7
+- [ ] `RegionEditor` 저장 시 `region.red_rect` 절대 좌표 대입 + `set_capture_mode(MODE_BOX)` 자동 전환 + `controller.reset_frame_hash()` 호출되는가? — BG-7
+- [ ] `RegionEditor`는 lazy 생성(첫 클릭 시) + closeEvent를 hide-instead-of-close로 처리하고, 앱 종료 시점만 `force_close()`로 실제 close 하는가? — BG-7
+- [ ] `RegionEditor`가 추가한다고 `BackgroundController`의 민감 창 가드(S-1)/capturable 가드(B-15)를 건드리지 않았는가? (RegionEditor는 geometry만 바꾸고 번역 파이프라인 미접근) — BG-7
 - [ ] 활성 창 모드에서 `GetForegroundWindow` 결과가 우리 자신 hwnd면 캡처를 건너뛰는가? (B-10 피드백 재발 방지) — T-2
 - [ ] 활성 창/hover 모드에서 사용자가 다른 창 클릭하려면 마우스 통과 토글이 있는가? (Ctrl+Shift+P) — W-1
 - [ ] 박스 모드 외에서 민감 창(패스워드/로그인/결제) 활성 시 OCR/번역을 자동 중지하는가? — S-1
@@ -53,6 +84,10 @@
 - [ ] 종료 시 ControlWindow가 OverlayWindow도 같이 닫는가? — W-2
 - [ ] OverlayWindow는 가상 데스크톱(모든 모니터) 전체 영역으로 확장됐는가? 화면 절대 → 윈도우 내 좌표 변환 적용했는가? — W-3
 - [ ] 윈도우 이동/리사이즈/드래그 시 OverlayWindow.update()가 호출되는가? — W-2 자체 리뷰
+- [ ] 워커 스레드 생성/시작은 `__init__` 본문에 있는가? QTimer slot 안으로 밀려 들어가지 않았는가? — CR-1
+- [ ] 캡처 허용/차단 토글은 ControlWindow와 OverlayWindow 둘 다 같은 상태로 바꾸는가? — CR-1
+- [ ] 활성 창/민감 창/자기 캡처 가드는 ControlWindow hwnd와 OverlayWindow hwnd를 모두 제외하는가? — CR-1
+- [ ] UIA 번역 경로도 OCR 경로와 동일하게 `assign_region_languages()`를 적용하는가? — CR-1
 - [ ] PersistentCache는 import 시점이 아니라 lazy load(첫 get/put 또는 preload_async)인가? — D-1
 - [ ] PersistentCache의 키는 sha256 hash이고, 값(번역)은 DPAPI로 전체 dict 암호화되어 디스크에 저장되는가? — D-1 / 보안 원칙 #2
 - [ ] UIA 모드는 mode_combo와 무관하게 항상 활성 창 민감 검사를 적용하는가? — UIA-1
@@ -61,6 +96,49 @@
 - [ ] PERSIST_CACHE는 비정상 종료 손실 방지를 위해 주기적 save(QTimer 30초)가 동작하는가? — A-1
 - [ ] 자동 실행 등록 시 `pythonw.exe` (콘솔 안 뜸) 또는 PyInstaller `.exe`를 우선 사용하는가? — A-1
 - [ ] 새 의존성/모델 추가 시 LICENSE-3RDPARTY.md에 동시 기록했는가? (CC-BY-NC, GPL, 상용 전용 금지)
+- [ ] 다음 step 이동 전 `python smoke_tests.py`를 통과했는가? 치명 회귀(CR-1/M-7/OverlayWindow)를 자동 확인했는가? — ST-1
+- [ ] 자동 실행 명령은 `.py` 실행 시 `pythonw.exe`를 우선해 콘솔 창을 피하는가? — A-2
+- [ ] 주기적 PersistentCache save는 백그라운드 스레드이며 `_mem_lock`으로 저장 중 put/get 경쟁을 막는가? — A-2
+- [ ] 릴리즈 워크플로우는 진단 전 Tesseract를 설치하고, 서명 후 zip/installer를 생성하는가? — R-1
+- [ ] 기본 배포 빌드는 PaddleOCR/PaddlePaddle을 제외하고, PyTorch `.lib`/`include` 개발 산출물을 제거하며, `Cocktail.exe --self-test`를 통과하는가? — R-2
+- [ ] 화면 좌표 클립은 `primaryScreen()` 단독이 아니라 `QApplication.screens()` 합집합(가상 데스크톱)인가? — W-4
+- [ ] 일시정지/스킵으로 `continue` 하기 전에 오버레이를 비웠는가? (`if self.translated_text: self.state_ready.emit([])`) — W-4 / UX-3
+- [ ] `ImageGrab.grab`에 `all_screens=True`를 줬는가? (False면 보조 모니터가 검은 이미지) — W-5
+- [ ] 창 상태(마우스 통과 등)를 강제로 바꾸는 경로에서 토글 플래그를 같이 동기화했는가? — W-6
+- [ ] 번역 정지(`set_running(False)`) 시 오버레이 자막을 지우는가? — UX-3
+- [ ] frame-skip 해시가 내용 + 캡처 영역 좌표 둘 다 반영하고, 평균이 아니라 셀 최대 변화량 기준인가? — F-1
+- [ ] OCR 픽셀 크기를 폰트에 넘길 때 `QFont(family, pt)` 생성자가 아니라 `setPixelSize()`인가? — F-2
+- [ ] MODE_WINDOW 캡처 영역이 "활성 창이 있는 모니터 1개"로 클램프되는가? (바탕화면/전 화면 덮는 창 = 전 모니터 캡처) — SC-1
+- [ ] 모델/스냅샷 로드는 `local_files_only=True` 우선 → 실패 시에만 네트워크인가? 전역 `HF_HUB_OFFLINE` 강제 금지 — LD-1
+- [ ] 번역 캐시 키는 `_cache_key_text()`(공백 collapse+strip) 정규화 텍스트인가? 표시용 원문은 원본 유지 — RT-1
+- [ ] 오버레이 상태 emit은 `_emit_state_if_changed()`를 통하는가? (직전 상태와 실질 동일하면 재그리기 생략) — RT-2
+- [ ] OCR 라인은 평균 confidence + 실문자 비율 필터를 통과한 것만 그리는가? (UI 부스러기/시계 제외) — NZ-1
+- [ ] `os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")`이 모듈 최상단(QApplication 생성 이전)에 있는가? — DP-1
+- [ ] 앱의 모든 좌표를 **물리 픽셀** 하나로 다루는가? (Qt 논리 좌표 가정·devicePixelRatio 곱셈 금지) — DP-1 / E-7
+- [ ] OCR 업스케일 판정이 이미지 크기만이 아니라 **1차 OCR 라인 높이 중앙값**도 보는가? (큰 화면 속 작은 캡션) — OU-1 / E-3
+- [ ] 재OCR은 전처리+`_lines_from_tess(data, scale)` 기존 경로를 재사용하는가? 새 좌표 환원 코드 금지 — OU-1
+- [ ] m2m100 폴백이 사용자 명시 src(en/ko 외) 또는 스크립트 확정 언어(ja/zh/ru…)에서만 켜지는가? 라틴 오판으로 새는 경로가 없는가? — SL-1
+- [ ] 모든 `model.generate(...)`에 `no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE`가 있는가? — RP-1
+- [ ] 오버레이에 그리기 직전 `display_gate_reject()`를 통과시켰는가? (확신 없으면 숨긴다) — DG-1
+- [ ] OCR 라인의 `font_size`는 word 높이 **중앙값**인가? (`max`는 이상치 하나에 끌려간다) — LM-1
+- [ ] 한 라인 안에서 높이 이상치 word 제거 + 큰 가로 간격 분할(`_line_segments`)을 거쳤는가? — LM-1
+- [ ] 오버레이 폰트는 한글 우선 스택(`OVERLAY_FONT_FAMILIES`)인가? `QFont("Arial")` 하드코딩 금지 — FT-1
+- [ ] 오버레이는 show() 후 `raise_()` + 주기적 `set_window_topmost()`로 항상-위를 되찾는가? — TM-1
+- [ ] 워커가 "비울 게 있나"를 판정할 때 `self.translated_text`(메인 스레드 갱신)가 아니라
+      워커 로컬 `self._last_emitted`를 보는가? emit은 `_emit_state`/`_clear_overlay_if_any` 단일 경로인가? — RC-1
+- [ ] 워커 스레드에서 Qt GUI 전용 API(`QApplication.screens()`, `QCursor.pos()`, `screenAt`)를 부르지 않는가?
+      화면 rect는 `region.screen_rects` 캐시, 커서는 `cursor_pos_physical()` — GT-1
+- [ ] 모니터 추가/제거/해상도 변경에 `screenAdded`/`screenRemoved`/`geometryChanged`가 연결돼
+      오버레이 재적합 + 화면 rect 캐시 갱신이 도는가? — MS-1
+- [ ] 자막 클립은 가상 데스크톱 전체가 아니라 "그 박스가 속한 모니터 ∩ 창 rect"인가? — CL-1
+- [ ] UIA가 민감 창에서 돌려주는 값이 빈 리스트가 아니라 `UIA_SKIP_FRAME` sentinel이고,
+      호출부가 OCR 폴백 없이 프레임을 건너뛰는가? — SV-1
+- [ ] `.bat` 파일에 한글(주석·경로·메시지)을 넣지 않았는가? 콘솔 OEM 코드페이지(CP949) 대
+      UTF-8 충돌로 파일이 깨진다. 한국어 안내는 `.md`가 담당 — RB-1
+- [ ] 의존성을 뺄 때 코드만 지우고 끝내지 않았는가? `requirements.txt` / `build.spec` /
+      `diagnose_environment.py` / `pre_release_check.py` 4곳을 같이 훑었는가? — DR-1
+- [ ] 문서에 "100% 로컬"처럼 사실보다 센 문구를 쓰지 않았는가? 최초 1회 모델 다운로드와
+      Tesseract 별도 설치는 반드시 함께 적는다 — DR-1
 
 ---
 
@@ -276,6 +354,9 @@
 ### E-3. 작은 글자 OCR 정확도
 - **수정**: 캡처 영역이 너무 작으면 `cv2.resize(scale_x=2, scale_y=2, interpolation=INTER_CUBIC)`
   upscale 후 OCR. Tesseract는 ~30px 글자 높이에서 정확도가 가장 좋음.
+- **미해결분 → OU-1 (2026-08-02, 4차)**: 이 조건은 **이미지 크기**만 본다. 큰 화면(1920x1080) 안의
+  작은 캡션(7~9px)은 트리거되지 않아 그대로 무너졌다. OU-1이 "1차 OCR 라인 높이 중앙값"
+  기준의 적응 업스케일로 이 구멍을 막는다.
 
 ### E-4. `mousePressEvent` 들여쓰기
 - 현재: 7-space (다른 메서드는 4-space). 동작은 하지만 가독성 ↓
@@ -316,8 +397,11 @@
 - **재발 방지**: 5초 체크리스트에 항목 추가. 캡처 차단 같은 OS 레벨 부작용이 있는 기능을 추가할 땐
   반드시 사용자가 풀 수 있는 경로(UI 또는 단축키)를 함께 제공.
 
-### E-7. DPI scaling 이중 적용 (정책 확정 + 수정 완료)
-- **결정**: `Qt.AA_EnableHighDpiScaling=True` 정책을 신뢰. devicePixelRatio를 위젯 좌표에 추가로 곱하지 않음.
+### E-7. DPI scaling 이중 적용 (정책 확정 + 수정 완료 / DP-1로 보강)
+- **⚠ 후속**: 2026-08-02 DP-1에서 정책이 갱신됐다 — **Qt 논리 스케일링 OFF
+  (`QT_ENABLE_HIGHDPI_SCALING=0`), 앱 전 좌표 = 물리 픽셀**. 아래 "배율을 수동으로 곱하지 않는다"
+  (`_scale=1.0`)는 그대로 유효하고, 이제 Qt도 곱하지 않는다. 상세는 §DP-1.
+- **결정(당시)**: `Qt.AA_EnableHighDpiScaling=True` 정책을 신뢰. devicePixelRatio를 위젯 좌표에 추가로 곱하지 않음.
 - **수정**: `self._scale = 1.0` 로 고정. `self.px = lambda v: int(v)`. 이로써 200% DPI에서도
   Qt가 logical→device 변환을 알아서 처리. font_size 등 다른 곳의 `self._scale` 곱셈은 1을 곱하므로 변화 없음.
 - **재발 방지**: Qt high-dpi 정책은 "AA_EnableHighDpiScaling 신뢰" 또는 "수동 scaling" 둘 중 하나만 선택.
@@ -475,6 +559,34 @@
   - 다국어 auto 처리 개선은 화면 전체 전역 추정이 아니라 bbox region 단위로 해야 한다.
   - 짧은 라틴 단어를 무조건 region 언어로 덮어쓰지 말고, `_LATIN_SHORT_HINTS`처럼 확실한 힌트는 보존한다.
 
+### M-8. opus-mt sepvoc 모델의 소스 인코딩 (번역문이 통째로 깨지던 원인) ⭐
+- **증상**: en→ko 번역 결과가 문장과 무관한 단어 나열. 예)
+  `"Please save your work before closing the window."` → `"☆ 팀 방콕 세그먼트 pest☆ 잘 Autograph."`
+- **원인**: `Helsinki-NLP/opus-mt-tc-big-en-ko`는 소스/타깃 vocab이 분리된(sepvoc) Marian 모델인데,
+  repo의 `tokenizer_config.json`에 `"separate_vocabs": false`로 **잘못** 적혀 있다.
+  그래서 transformers 5.x의 `AutoTokenizer`가 영어 입력을 **타깃(한국어) vocab**으로 인코딩하고,
+  `source.spm` 조각 32,000개 중 25,330개가 `<unk>`로 뭉개진다. 모델은 그 쓰레기 입력을 그대로 번역한다.
+  디코딩은 타깃 vocab이 맞으므로 정상 — **입력 경로만** 잘못됐다.
+- **수정** (`OpusMtTranslator`):
+  1. `_load_source_spm()` — `huggingface_hub.snapshot_download(model_name)`(캐시 히트, 재다운로드 없음)로
+     스냅샷 경로를 얻고 `source.spm`을 `sentencepiece.SentencePieceProcessor`로 직접 로드.
+  2. sepvoc 판정은 설정 파일이 아니라 실측: `source.spm` 조각을 샘플링해 20% 이상이
+     `tok.get_vocab()`에 없으면 sepvoc → spm 경로. 공유 vocab 모델이면 `None`(기존 경로 유지).
+  3. `_encode_with_spm()` — 라인별 `sp.encode(text)[:255] + [eos]`, `pad_token_id`로 패딩,
+     실토큰 1 / 패딩 0의 `attention_mask`를 만들어 device로 올린다(입력은 int64라 fp16과 무관).
+  4. `source.spm` 부재/로드 실패는 `[WARN]` 후 기존 토크나이저 경로로 degrade (크래시 금지).
+- **주의**:
+  - `BILINGUAL_MODELS`에 새 opus-mt 모델을 등록하면 sepvoc 여부가 모델마다 다르다.
+    실측 판정 로직이 자동 처리하지만, 첫 로드 로그에 `sepvoc 모델 감지`가 찍히는지 확인할 것.
+  - m2m100 폴백 경로는 이 문제와 무관하다(단일 vocab). 건드리지 말 것.
+  - 콘솔이 cp949인 Windows에서는 `print`에 em dash(—)를 쓰면 `UnicodeEncodeError`가 난다.
+    모델 로드 로그처럼 예외 처리 안쪽에서 터지면 원인 추적이 어려워지므로 ASCII 문장부호를 쓴다.
+- **재발 방지**:
+  - HF repo의 토크나이저 메타데이터를 믿지 말 것. 번역 품질 이상은 **입력 토큰 id를 먼저 덤프**해
+    `<unk>` 비율을 본다 (모델/샘플링 탓으로 돌리기 전에).
+  - `smoke_tests.py::test_m8_opus_mt_source_encoding`이 실제 모델로 한 문장을 번역해
+    한글 포함 + `<unk>` 부재를 검사한다 (모델이 로컬 HF 캐시에 없으면 자동 skip).
+
 ---
 
 ### T-1. 시스템 트레이 + 글로벌 단축키 도입 (Phase 1A)
@@ -530,6 +642,112 @@
 - **재발 방지**:
   - 새 윈도우 추가 시 가상 데스크톱 좌표(보조 모니터 음수 가능) 전제로 설계.
   - 화면 절대 좌표를 그릴 때는 항상 `self.geometry().topLeft()` 빼기.
+
+### CR-1. 2026-05-04 크리티컬 리뷰 수정 — 워커 시작/OverlayWindow 일관성/UIA M-7
+- **증상**:
+  1. `translation_thread` 생성/시작 코드가 `TransparentWindow.__init__` 본문이 아니라
+     `_on_cache_save_tick()` 내부로 잘못 들어가 있었다. 앱 시작 후 30초까지 워커가 없고,
+     그 전에 진짜 종료하면 `self.translation_thread` 접근에서 예외 가능.
+  2. `스샷OK/스샷차단` 토글이 ControlWindow에만 적용되고 실제 렌더링 담당인 OverlayWindow에는 적용되지 않았다.
+     사용자는 스크린샷 허용이라고 보지만 번역 오버레이가 캡처에서 빠질 수 있었다.
+  3. 활성 창/민감 창 가드가 ControlWindow hwnd만 제외하고 OverlayWindow hwnd는 일부 경로에서 제외하지 않았다.
+  4. UIA 경로는 OCR 경로와 달리 `assign_region_languages()`를 거치지 않아 M-7 region smoothing이 빠져 있었다.
+- **수정**:
+  1. `translation_thread` 생성/시작과 `old_pos` 초기화를 `__init__` 본문으로 복귀.
+     `_on_cache_save_tick()`은 `PERSIST_CACHE.save()`만 수행.
+  2. `toggle_capturable()`이 ControlWindow와 OverlayWindow 둘 다 `SetWindowDisplayAffinity`를 동일 상태로 변경.
+  3. `_foreground_window_rect()`와 `_check_sensitive_pause()`에서 OverlayWindow hwnd도 자기 창으로 간주해 제외.
+  4. `_uia_collect_and_translate()`에서 `assign_region_languages(uia_results, src_hint)`를 적용 후
+     `batch_translate(texts, src_langs, tgt_lang)` 호출.
+- **재발 방지**:
+  - QTimer slot 아래에 새 초기화 코드를 추가할 때 들여쓰기 검토. 특히 스레드 시작, 단축키 등록, 상태 초기화는
+    `__init__` 본문에 있어야 한다.
+  - 컨트롤/오버레이 2윈도우 구조에서는 OS 레벨 상태(capture affinity, hwnd guard, mouse-through)를 항상 양쪽 기준으로 검토한다.
+  - 새 입력 경로(OCR/Paddle/UIA 등)를 추가하면 언어 감지 후처리(M-6/M-7), 캐시, 번역 라우팅이 같은 정책을 타는지 확인한다.
+
+### ST-1. 다음 step 전 자동 smoke test
+- **목적**: CR-1 같은 들여쓰기/윈도우 분리 일관성 결함은 수동 리뷰만으로 재발 가능하다.
+  다음 개발 단계로 넘어가기 전 빠른 자동 검사를 고정한다.
+- **수정**:
+  1. `smoke_tests.py` 추가.
+  2. 빠른 기본 검사:
+     - `translation_thread`가 `__init__`에 있고 `_on_cache_save_tick()`에는 없는지 AST 검증.
+     - `toggle_capturable()`이 ControlWindow와 OverlayWindow 둘 다 바꾸는지 검증.
+     - 활성 창/민감 창 가드가 OverlayWindow hwnd도 제외하는지 검증.
+     - UIA 경로가 `assign_region_languages()`를 쓰는지 검증.
+     - M-7 region smoothing 샘플 검증.
+     - `PersistentCache._key()`가 sha256 hash이고 평문을 담지 않는지 검증.
+  3. `--paddle` 옵션으로 느린 PaddleOCR 실제 추론 smoke test 제공.
+- **재발 방지**:
+  - 다음 step 시작/종료 전 `python smoke_tests.py`를 실행한다.
+  - PaddleOCR 모델/엔진을 건드린 날에는 `python smoke_tests.py --paddle`까지 실행한다.
+  - smoke test가 실패하면 기능 추가를 중단하고 회귀부터 수정한다.
+
+### A-2. Phase 6 보강 — 자동 실행 콘솔 창 회피 + 캐시 save 백그라운드화
+- **증상/위험**:
+  1. 개발 환경에서 Windows 자동 실행을 등록하면 `python.exe Cocktail완성본.py` 형태가 되어 부팅 시 콘솔 창이 뜰 수 있다.
+  2. `QTimer` 30초 save가 메인 스레드에서 DPAPI 암호화/파일 write를 수행하면 캐시가 커질 때 UI 끊김이 생길 수 있다.
+  3. 워커 스레드가 `PersistentCache.put/get` 중일 때 save가 동시에 `_mem`을 직렬화하면 경쟁 조건 가능성이 있다.
+- **수정**:
+  1. `_autorun_command()`가 `.py` 실행 형태에서는 같은 Python 폴더의 `pythonw.exe`를 우선 사용.
+     없을 때만 현재 `python.exe`로 폴백. PyInstaller `.exe`는 기존대로 exe 자체 등록.
+  2. `_on_cache_save_tick()`은 `_cache_save_in_progress` 가드 후 daemon thread에서 `PERSIST_CACHE.save()` 수행.
+  3. `PersistentCache`에 `_mem_lock = threading.RLock()` 추가. `_load/save/get/put`의 `_mem` 접근을 보호.
+  4. save 중 새 put이 들어오면 `snapshot == self._mem`일 때만 `_dirty=False`로 내려 새 변경 손실을 막음.
+  5. `smoke_tests.py`에 `test_autorun_prefers_pythonw_for_python_script`,
+     `test_cache_timer_saves_in_background` 추가.
+- **재발 방지**:
+  - UI 타이머에서 파일 I/O/암호화/모델 작업을 직접 하지 말 것. 짧은 상태 갱신만 허용.
+  - 자동 실행/시작 프로그램 등록은 사용자가 보는 창 개수를 기준으로 검토한다. 개발 실행이면 `pythonw.exe`, 배포면 `.exe`.
+  - 공유 dict를 저장/수정하는 코드는 lock과 dirty semantics를 함께 검토한다.
+
+### R-1. 릴리즈 워크플로우 배포 순서 보강
+- **증상/위험**:
+  1. GitHub Actions Windows runner에는 Tesseract OCR 엔진이 기본 설치되어 있지 않을 수 있다.
+     `diagnose_environment.py`를 먼저 실행하면 CI 릴리즈가 진단 단계에서 실패한다.
+  2. 코드 서명 step이 zip 이후면 릴리즈 zip 안에 서명 전 `Cocktail.exe`가 들어갈 수 있다.
+  3. PyInstaller dist에 README/LICENSE/라이선스 고지 문서가 없으면 배포 zip 사용자가 라이선스/사용법을 확인하기 어렵다.
+- **수정**:
+  1. `.github/workflows/release.yml`에 `Install Tesseract OCR` step 추가.
+     `choco install tesseract` 후 `TESSERACT_CMD`를 `GITHUB_ENV`에 기록.
+  2. 릴리즈 워크플로우 순서: 진단/smoke/pre-release → tessdata 다운로드 → PyInstaller → 서명(optional) →
+     Inno Setup 설치/인스톨러 빌드 → zip → artifact/release 업로드.
+  3. `build.spec`에 README, LICENSE, LICENSE-3RDPARTY, BUILD, CODE_SIGNING, UPDATE_LOG, TECH_STACK,
+     VISION_AND_ROADMAP 문서를 datas로 포함.
+  4. `pre_release_check.py` 추가. 필수 파일, installer version, build.spec docs, release workflow 순서,
+     의존성/라이선스 정책, 문서 링크, 생성 디렉터리 여부를 검사.
+  5. ST-1 실행이 만드는 `__pycache__` 때문에 pre-release가 실패하지 않도록
+     `pre_release_check.py`에서 `__pycache__`는 자동 정리하고 `build/` 같은 blocking 생성물만 실패 처리.
+  6. 로컬에서 `pyinstaller` 명령이 PATH의 다른 Python(예: Python 3.12)을 사용할 수 있음을 확인.
+     BUILD.md와 release workflow를 `python -m PyInstaller --noconfirm build.spec` 기준으로 변경해
+     현재 앱 의존성이 설치된 Python 환경에서 빌드하도록 고정.
+- **재발 방지**:
+  - 릴리즈 zip을 만들기 전 서명/문서 포함 여부를 확인한다.
+  - CI에서 실행하는 진단이 요구하는 외부 바이너리(Tesseract/Inno 등)는 workflow에서 먼저 설치한다.
+  - 배포 관련 파일을 바꾸면 `python pre_release_check.py`를 반드시 실행한다.
+
+### R-2. 배포 용량/패키지 자기검증 보강
+- **증상/위험**:
+  1. 개발 PC에 PaddleOCR/PaddlePaddle이 설치되어 있으면 기본 `build.spec`가 선택 OCR 백엔드까지 자동 번들링한다.
+     일반 배포본이 너무 커지고, 사용자가 원하지 않는 선택 엔진까지 포함될 수 있다.
+  2. PyInstaller의 `collect_all("torch")`가 런타임에 불필요한 `.lib` 및 `include` 개발 산출물을 포함해
+     Windows 배포 용량이 크게 증가한다.
+  3. zip 배포물은 `dist/Cocktail`만 압축하므로, 다운로드된 `tessdata/*.traineddata`가 PyInstaller datas에 없으면
+     인스톨러가 아닌 zip 사용자에게 OCR 언어 데이터가 빠질 수 있다.
+  4. CI가 소스 smoke test까지만 실행하면 실제 `dist/Cocktail/Cocktail.exe`가 기본 의존성을 갖고 시작 가능한지 확인하지 못한다.
+- **수정**:
+  1. `build.spec`에 `COCKTAIL_BUNDLE_PADDLE` 게이트 추가. 기본값은 `0`이며, `1`일 때만 PaddleOCR/PaddlePaddle을 포함한다.
+  2. 기본 빌드에서는 `paddle`, `paddleocr`, `modelscope`를 PyInstaller excludes에 추가한다.
+  3. PyTorch 수집 결과에서 `.lib`와 `torch/include`를 필터링한다. 런타임 DLL은 유지하고 개발용 파일만 제거한다.
+  4. `tessdata/*.traineddata`가 존재하면 PyInstaller dist의 `tessdata/`에 포함해 zip과 installer가 같은 OCR 언어 데이터를 갖게 한다.
+  5. `Cocktail완성본.py --self-test` 추가. GUI/QApplication 및 번역 모델 로드 없이 필수 모듈, Tesseract, `eng.traineddata`, 캐시 키 규칙을 검사한다.
+  6. GitHub Actions가 PyInstaller 후 `dist\Cocktail\Cocktail.exe --self-test`를 실행하도록 변경한다.
+  7. `smoke_tests.py`와 `pre_release_check.py`에 R-2 정책 검사를 추가한다.
+- **재발 방지**:
+  - 선택 백엔드를 기본 배포물에 넣을 때는 환경변수/릴리즈 이름/라이선스 문서까지 함께 바꾼다.
+  - 빌드 용량이 튀면 `_internal`의 상위 디렉터리와 `torch/lib` 파일 크기를 먼저 확인한다.
+  - zip 배포도 installer와 동일하게 `tessdata/` 포함 여부를 확인한다.
+  - 배포 전에는 소스 smoke test와 패키지 self-test를 둘 다 실행한다.
 
 ### UIA-1. UIA 어댑터 + 활성 창 텍스트 직접 추출 (Phase 2/3)
 - **목적**: 비전 V-1 — OCR 없이 UI 텍스트 직접 읽기. 시작 메뉴/설정/Office/브라우저 등 정확/빠름.
@@ -652,6 +870,498 @@
   - 새 모드 추가 시 `_MODE_LABELS` + 트레이 메뉴 + `_update_red_rect_for_mode()` 분기 4곳을 한 번에.
   - 활성 창/hover의 절대좌표 → 위젯 좌표 변환은 항상 `self.geometry().x()/y()` 빼기.
 
+### W-4. MODE_WINDOW 캡처 영역을 primaryScreen으로만 클립 (보조 모니터 영구 정지)
+- **증상**: 활성 창이 보조 모니터에 있으면 번역이 아예 안 나옴. 상태 메시지도 없음.
+- **원인**: UX-2 Layer 2 클립이 `QApplication.primaryScreen()` **한 화면**만 기준.
+  보조 모니터 창의 절대 좌표는 primary 화면 밖 → 교집합 0 → 매 사이클 `continue` 무한 반복.
+  게다가 `continue` 전에 오버레이를 비우지 않아 직전 자막이 화면에 그대로 남음.
+- **수정**: `QApplication.screens()` 전체의 합집합(가상 데스크톱)으로 클립.
+  `right()/bottom()`은 Qt 규약상 마지막 픽셀이라 `+1` 해서 exclusive 경계로 맞춤.
+  교집합 8px 미만이면 `continue` 전에 `if self.translated_text: self.state_ready.emit([])`
+  (B-15 / S-1 등 다른 일시정지 경로와 같은 패턴).
+- **재발 방지**: 화면 좌표를 클립할 땐 항상 가상 데스크톱 기준. `primaryScreen()` 단독 사용 금지.
+  일시정지/스킵 경로를 추가할 땐 오버레이 비우기를 반드시 동반 (잔상 방지).
+
+### W-5. ImageGrab이 보조 모니터를 검은 이미지로 캡처
+- **증상**: 보조 모니터 영역 OCR 결과가 0줄. 저장해 보면 전부 검정.
+- **원인**: `ImageGrab.grab(bbox=...)`의 `all_screens` 기본값이 False.
+  PIL win32 경로(`PIL/ImageGrab.py`)는 `grabscreen_win32(..., all_screens, ...)`가 돌려준
+  `offset` 기준으로 `im.crop((left-x0, top-y0, ...))` 한다. False면 primary만 캡처 + `offset=(0,0)`
+  이라 primary 밖 좌표는 이미지 밖 → 검정.
+- **수정**: `ImageGrab.grab(bbox=(x1,y1,x2,y2), all_screens=True)`.
+  True면 가상 데스크톱 전체를 찍고 `offset`이 가상 화면 원점이라 **절대 좌표 bbox가 그대로 맞는다**.
+- **재발 방지**: 화면 캡처는 항상 `all_screens=True`. 호출처가 늘면 한 곳으로 모을 것 (현재 워커 1곳).
+
+### W-6. 마우스 통과 토글 플래그 ↔ 실제 창 상태 불일치 (첫 토글 무효)
+- **증상**: `Ctrl+Shift+P` 첫 번째 입력이 아무 효과 없음. 두 번째부터 동작.
+- **원인**: `SettingsWindow._mouse_through` 초기값이 `False`인데, 실제로는
+  `OverlayWindow.update_for_mode()`가 시작 시점과 모드 전환 때마다 통과를 **항상 ON**으로 강제.
+  플래그와 창 상태가 어긋나 첫 토글이 "OFF→ON"(이미 ON)으로 낭비됨.
+- **수정**: 상태 단일 출처화.
+  1. 초기값 `True` (실제 적용 상태와 일치) + 트레이 액션 `setChecked(self._mouse_through)`.
+  2. `_sync_mouse_through(on)` 헬퍼 — 플래그 + 트레이 체크 동시 갱신.
+  3. `set_capture_mode()`에서 `overlay.update_for_mode()`(통과 ON 강제) 직후 `_sync_mouse_through(True)`.
+- **재발 방지**: 창 상태를 강제로 바꾸는 경로를 추가하면 반드시 같은 자리에서 토글 플래그를 동기화.
+  통과 OFF는 오버레이가 가상 데스크톱 전체 클릭을 삼키는 상태라 사용자가 인지 가능해야 함(트레이 체크 표시).
+
+### UX-3. "번역 정지" 후 오버레이 자막 잔상
+- **증상**: 정지 버튼/`Ctrl+Shift+T`/트레이 토글로 멈춰도 마지막 번역 박스가 화면에 계속 떠 있음.
+- **원인**: `set_running(False)`는 워커 루프만 멈출 뿐, `translated_text`를 비우지 않음.
+  워커가 멈췄으니 `state_ready`도 더는 안 나와 오버레이가 마지막 프레임 상태로 고정.
+- **수정**: `BackgroundController.set_running()`에서 `value=False`이고 남은 상태가 있으면
+  `self.state_ready.emit([])`. 버튼/글로벌 단축키/트레이 메뉴가 모두 `toggle_running` →
+  `set_running` 단일 경로라 한 곳 수정으로 전 경로 커버.
+- **재발 방지**: 파이프라인을 멈추는 새 경로를 만들면 오버레이 비우기를 같이 넣을 것.
+
+### F-1. frame-skip 해시가 둔감 (자막 한 줄 변화 / 창 이동 놓침)
+- **증상**: 자막이 바뀌었는데 번역이 안 갱신됨. 활성 창을 옮기면 옛 좌표에 자막이 남음.
+- **원인 2가지**:
+  1. `hash_distance`가 16×16 그레이의 **평균** 차이 < 2면 스킵. 256셀 중 1~2셀만 바뀌는
+     자막 한 줄 변화는 평균 ≈1이라 통째로 삼켜짐.
+  2. 해시가 **내용만** 반영. MODE_WINDOW에서 창 위치만 바뀌면 내용 해시가 같아 스킵 →
+     자막이 예전 좌표에 그대로 렌더링.
+- **수정**:
+  - (a) `cheap_hash(img, rect)` — 캡처 영역 좌표 4개(int32, 16바이트)를 해시 앞에 붙임.
+    헤더가 다르면 `hash_distance`가 즉시 `1<<30` 반환(무조건 재처리).
+  - (b) 평균 → **셀 단위 최대 변화량**(`.max()`)으로 교체. 임계는 상수 `FRAME_DIFF_THRESHOLD = 8`
+    (튜닝 레버 — 노이즈로 과잉 재처리면 올리고, 반응이 둔하면 내림).
+  - 부수: `cheap_hash`의 `cv2.COLOR_BGR2GRAY` → `COLOR_RGB2GRAY` (입력이 PIL RGB, B-8 규약 위반이었음).
+- **가드**: `smoke_tests.py::test_f1_frame_skip_local_change` — 1셀만 바뀐 이미지(구 평균 기준 <2)와
+  영역만 이동한 경우 둘 다 임계 이상으로 판정되는지 확인.
+- **재발 방지**: frame-skip 판정은 "내용 + 캡처 영역" 둘 다. 평균 기반 지표는 국소 변화를 못 본다.
+
+### F-2. 폰트 크기 픽셀/포인트 혼동 (자막 박스 1.2배 과대)
+- **증상**: 번역 박스 글자가 원문보다 크게 나와 인접 줄과 겹침. 축소 루프가 자주 발동.
+- **원인**: OCR bbox에서 얻은 값은 **픽셀** 높이인데 `QFont("Arial", size)`의 두 번째 인자는 **pointSize**.
+  96dpi에서 1pt ≈ 1.333px이라 실제로 약 1.2~1.33배 커짐.
+- **수정**: `_fit_font`에서 `QFont("Arial")` 생성 후 `font.setPixelSize(size)`.
+  초기 크기 계산(`font_size * 0.9`)과 9까지 줄이는 축소 루프 로직은 그대로 유지.
+- **재발 방지**: OCR/화면 좌표에서 온 수치를 Qt 폰트에 넘길 땐 항상 `setPixelSize`. 생성자 2번째 인자는 pt.
+
+### SC-1. 활성 창 모드가 전 모니터를 캡처 (오버레이가 모든 모니터에 꽉 참)
+- **증상**: 오버레이 박스가 모든 모니터를 뒤덮고 중구난방으로 뜸. W-5(all_screens=True)로
+  보조 모니터가 실제로 찍히기 시작하면서 표면화.
+- **원인**: `MODE_WINDOW`는 `GetWindowRect(GetForegroundWindow())`를 그대로 캡처 영역으로 쓴다.
+  바탕화면(Progman/WorkerW)이나 가상 데스크톱 전체를 덮는 창이 활성이면 그 rect가
+  **모든 모니터 합집합** → 전 화면 OCR(수십~수백 줄) + 전 화면 렌더링.
+  W-4 클립도 "가상 데스크톱 합집합" 기준이라 이 경우 아무것도 잘라 내지 못했다.
+- **수정**: `CaptureRegionController.update_for_mode()`에서 MODE_WINDOW일 때 창 rect를
+  **활성 창 중심점이 속한 모니터 1개**(`CaptureRegionController.screen_rect_at()` →
+  `QGuiApplication.screenAt()`, 실패 시 `primaryScreen()`)로 교집합.
+  Qt `right()/bottom()`은 마지막 픽셀이라 `+1`(W-4와 같은 규약).
+  `MODE_BOX`(사용자 영역)는 클램프 전에 return하므로 무영향, `MODE_HOVER`도 무영향.
+  W-5(`all_screens=True`)와 W-4(합집합 클립)는 그대로 — 캡처 능력이 아니라 **영역**만 좁힌 것.
+- **튜닝 레버**: `CLAMP_WINDOW_TO_ACTIVE_SCREEN = True`. 창을 두 모니터에 걸쳐 쓰는
+  사용자는 False로 구 동작 복귀.
+- **가드**: `smoke_tests.py::test_sc1_active_screen_clamp`.
+- **재발 방지**: "활성 창"류 영역은 창 rect를 그대로 믿지 말 것. 셸/전체화면 창이 가상
+  데스크톱 전체를 반환한다.
+
+### LD-1. 모델 로드 69초 — 로컬 캐시가 있는데 매번 HF Hub 네트워크 체크
+- **증상**: 앱 시작 → 첫 번역까지 78초. 로그에서 `opus-mt 로드 중` 직후
+  `Warning: You are sending unauthenticated requests to the HF Hub` → 긴 정지,
+  `Fetching 14 files` (snapshot_download)까지 매번 발생. 모델은 이미 로컬 캐시에 있었다.
+- **원인**: `from_pretrained` / `snapshot_download` 기본 동작이 캐시가 있어도 Hub에
+  파일 목록·리비전을 물어본다. 네트워크가 느리거나 rate-limit이면 그대로 대기.
+- **수정**: `_load_local_first(loader, model_name, **kw)` 헬퍼 —
+  `local_files_only=True`로 먼저 시도, 캐시 없음/불완전으로 예외가 날 때만 네트워크 재시도.
+  적용처 4곳: opus-mt `AutoTokenizer`/`AutoModelForSeq2SeqLM`, m2m100 `M2M100Tokenizer`/모델,
+  M-8 `snapshot_download`. **M-8 sepvoc 판정/인코딩 로직 자체는 미변경**(경로만 로컬 우선).
+- **금지**: `HF_HUB_OFFLINE` 등 전역 오프라인 강제 — 첫 설치(캐시 없음)를 통째로 망가뜨린다.
+  반드시 try/except 폴백으로.
+- **가드**: `smoke_tests.py::test_ld1_local_first_model_load`.
+- **재발 방지**: 모델/파일 로드를 새로 추가하면 `_load_local_first`를 경유시킬 것.
+
+### RT-1. OCR 미세 흔들림으로 캐시 miss → 재번역 폭주
+- **증상**: 같은 정적 문서인데 1~3초마다 36~57줄을 계속 재번역(300~1300 ms/사이클). GPU/CPU 상시 점유.
+- **원인**: 번역 캐시 키가 OCR 원문 **그대로**. Tesseract는 같은 화면도 프레임마다 공백/줄바꿈이
+  미세하게 달라져 (`"A  B"` ↔ `"A B"`) 매번 새 키 → LRU/디스크 캐시 전부 miss.
+- **수정**: `_cache_key_text()` — 연속 공백 collapse + strip만 하는 보수적 정규화.
+  메모리 LRU와 `PERSIST_CACHE` 키를 모두 정규화 텍스트로 통일(`pending_keys`).
+  **모델 입력·표시용 원문/번역문은 원본 유지** (배치/라우팅/sepvoc 경로 미변경).
+  문자 자체를 손대는 정규화(소문자화, 유니코드 NFKC 등)는 다른 언어를 망칠 수 있어 하지 않음.
+- **재발 방지**: OCR에서 온 텍스트를 키로 쓸 땐 반드시 정규화 텍스트. 단, 정규화는 공백 수준까지만.
+
+### RT-2. 실질 동일한 상태를 매 사이클 재그리기 (깜빡임)
+- **증상**: 화면이 안 바뀌었는데 자막 박스가 계속 다시 그려져 깜빡임.
+- **원인**: bbox가 1~2px 흔들리면 `state_ready.emit(new_state)`가 무조건 나가고 오버레이 전체 repaint.
+- **수정**: `_state_signature(state, round_px)` — (원문, 번역문, `bbox // round_px`) 지문.
+  `BackgroundController._emit_state_if_changed()`가 직전 `translated_text`와 지문이 같으면 emit 생략.
+  OCR 경로와 UIA 경로 둘 다 이 헬퍼를 통과(비우기 emit `state_ready.emit([])`는 기존 가드 유지).
+- **튜닝 레버**: `STATE_BBOX_ROUND_PX = 4`. 올리면 둔감(자막이 조금 움직여도 갱신 안 함),
+  0/1이면 사실상 무효.
+- **가드**: `smoke_tests.py::test_rt1_cache_key_and_state_dedup` (RT-1과 공용).
+- **재발 방지**: 상태 emit 경로를 새로 만들면 `_emit_state_if_changed`를 경유시킬 것.
+
+### NZ-1. OCR 노이즈 라인까지 박스로 그림 (중구난방)
+- **증상**: 아이콘 글자, 시계, 테두리 잡음까지 번역 박스가 붙어 화면이 지저분함.
+  게다가 잡음 라인이 엉뚱한 언어로 감지되면 m2m100(418M) 폴백 로드를 유발한다.
+- **원인**: 필터가 word 단위 `conf < 30` 하나뿐. 라인 전체의 신뢰도/문자 구성은 안 봤다.
+- **수정**: `_lines_from_tess`에 라인 단위 2단 필터 추가.
+  1. 라인 평균 word confidence < `OCR_LINE_MIN_CONF`(35.0) → 제외 (conf가 전부 -1이면 통과).
+  2. `_ocr_line_is_noise()` — 공백 제외 길이 < `OCR_LINE_MIN_CHARS`(2),
+     영숫자/한글/CJK 비율 < `OCR_LINE_MIN_LETTER_RATIO`(0.5),
+     `OCR_LINE_REQUIRE_ALPHA`(True)일 때 글자(`isalpha`) 0개면 제외.
+- **튜닝 레버**: 위 4개 상수. 부스러기가 남으면 `OCR_LINE_MIN_CONF`를 50~60으로,
+  진짜 문장이 사라지면 내린다. 숫자만 있는 원문도 번역하려면 `OCR_LINE_REQUIRE_ALPHA=False`.
+- **실측**: 렌더 이미지 E2E — 정상 문장/"OK"/"Settings"는 유지, `10:30`·`~ | * _`는 제거.
+- **가드**: `smoke_tests.py::test_nz1_ocr_noise_line_filter`.
+- **재발 방지**: 임계는 "정상 짧은 문장이 죽지 않는 선"에서 낮게 시작하고 상수로 노출할 것.
+
+### DP-1. Qt 논리 좌표 vs 물리 픽셀 혼용 → 주 모니터에 오버레이가 아예 안 뜸 ⭐
+- **증상**: 100% 배율 주 모니터에서는 오버레이 자막이 **전혀** 안 보이고,
+  175% 배율 보조 4K 모니터에서는 자막이 원문 위치에서 어긋난 채 뜬다.
+- **실측 근거 (개발 PC, 2026-08-02)**:
+  - 주 모니터 1920x1080 @100% → 물리/논리 모두 `(0, 0, 1920, 1080)`
+  - 보조 4K @175% → 물리 `(-3840, -535, 0, 1625)` / Qt 논리 `(-3840, -535, -1646, 699)`
+  - 즉 Qt 논리 공간에는 `-1646 ~ 0` 이라는, 어느 모니터에도 속하지 않는 **틈**이 존재한다.
+- **원인**: 좌표계 혼용. `GetWindowRect` / `ImageGrab` / OCR bbox는 전부 **물리 픽셀**인데
+  Qt 지오메트리(`screens().geometry()`, `setGeometry`, `paintEvent`)와 `QCursor.pos()`는 **논리 좌표**.
+  가상 데스크톱 전체를 덮는 단일 투명 창인 OverlayWindow가 보조 모니터의 1.75 배율로 스케일되면서,
+  주 모니터에 그려야 할 자막이 1.75배 우측으로 밀려 창 밖으로 나가 버린다.
+  E-7은 "Qt 자동 high-dpi를 신뢰"까지만 정했을 뿐, 캡처 API와 단위가 다른 문제는 다루지 않았다.
+- **수정**: Qt의 논리 스케일링을 끄고 **앱 전 좌표를 물리 픽셀로 통일**한다.
+  ```python
+  import os
+  os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")   # 모듈 최상단, QApplication 생성 이전
+  ```
+  - 논리 == 물리(devicePixelRatio 1)가 되어 `GetWindowRect` · `ImageGrab` · OCR bbox ·
+    `paintEvent` · `QCursor.pos()` · W-4 가상 데스크톱 클립 · SC-1 `screenAt` 판정이 한 좌표계로 정합.
+  - `OverlayWindow._fit_to_screen` / `RegionEditor._fit_to_virtual_desktop`의 `screens()` 합집합도
+    자동으로 물리 rect가 되므로 **코드 변경 불필요** (확인 완료).
+  - DPI awareness(퍼모니터 인식) 자체는 Qt가 유지 → OS가 창을 늘려 뭉개는 블러 없음.
+- **E-7과의 관계**: E-7(`_scale=1.0` 고정, 수동 배율 곱셈 금지)은 **그대로 유효**.
+  새 규약은 그 위에 얹힌다 — "Qt 논리 스케일링 OFF, 전 좌표 = 물리 픽셀".
+  즉 여전히 배율을 **곱하지 않는다**. 다만 이제는 Qt도 곱하지 않는다.
+- **한계 (의도된 트레이드오프)**: 스케일링이 꺼져 있으므로 설정 창(880x120)과 트레이 메뉴를
+  175% 모니터로 옮기면 물리 픽셀 그대로 **작게** 보인다. 100% 주 모니터에서는 기존과 동일.
+  오버레이 좌표 정합(핵심 기능)을 UI 크기(편의)보다 우선한 선택.
+  UI 크기까지 되찾으려면 스케일링을 다시 켜는 게 아니라, 위젯 크기에만 모니터별
+  `logicalDotsPerInch/96`을 곱하는 별도 작업이 필요하다.
+- **가드**: `smoke_tests.py::test_dp1_highdpi_scaling_disabled_before_qapp`
+  (모듈 레벨 문장인지 + `QApplication(...)` 호출보다 앞선 줄인지 AST로 검사).
+- **재발 방지**: 좌표를 다루는 새 코드는 "이 값이 물리인가 논리인가"를 묻지 말고
+  **전부 물리**로 간주한다. Qt 스케일링을 다시 켜는 변경은 캡처/OCR 전 경로를 같이 바꿔야 하므로 금지.
+
+### OU-1. 작은 글씨(캡션/각주) OCR 붕괴 — 이미지 크기 기준 업스케일의 사각지대 ⭐
+- **증상**: 사용자 보고 "작은 글씨는 번역이 아예 안 나온다". 본문은 정상인데 이미지 캡션·각주만 통째로 누락.
+- **실측 근거 (개발 PC, 2026-08-02, `doc_55.png` 724x954)**:
+
+  | | 라인 수 | 라인 높이 중앙값 | 캡션 블록 | 감지 언어 |
+  |---|---|---|---|---|
+  | 수정 전(1차 OCR) | 33 | 13px | **전멸** (`Sr eae aa! Feng JV` conf 60대 잔재 1줄) | `{en:32, af:1}` |
+  | 2배 확대 재OCR | 36 | 12px | 복구 (`aur mail pilot flying` conf 79.2, `the 1920s.` conf 92.7, 본문 캡션 conf 95.7) | `{en:34, no:1, de:1}` |
+
+- **원인**: Tesseract는 글자 높이 12px 아래에서 급격히 무너진다(7~9px 캡션은 conf 60대 + 철자 붕괴).
+  E-3의 업스케일은 **이미지 min(h,w) < 400** 이라는 크기 조건이라, 화면 전체를 캡처하는 실사용에서는
+  절대 발동하지 않았다. 즉 "작은 이미지"는 커버했지만 "큰 이미지 속 작은 글자"는 못 봤다.
+- **수정**: `perform_ocr_with_boxes` — 1차 OCR 후 **통과 라인들의 높이 중앙값**이
+  `OCR_UPSCALE_TRIGGER_PX`(18) 미만이면 `OCR_UPSCALE_FACTOR`(2)배 확대해 재OCR하고 그 결과를 채택.
+  - 전처리+OCR을 `_tess_lines(gray, lang_str, scale)`로 묶어 1차/재OCR가 **같은 경로**를 탄다.
+    좌표 환원은 기존 `_lines_from_tess(data, scale)`의 `// scale` 인프라를 그대로 재사용 — 새 좌표 경로 없음.
+  - 확대는 `cv2.INTER_LANCZOS4`로 통일(기존 소형 이미지 경로 포함). 실측상 텍스트에서 CUBIC보다 철자가 정확.
+  - **비용**: 재OCR은 트리거가 걸린 작은 글씨 화면에서만 발생한다. 본문 글자가 18px 이상인 일반 화면은
+    1차 OCR 한 번으로 끝나므로 추가 비용 0. (평균이 아니라 **중앙값**을 쓰는 이유: 제목 한 줄이 커도 끌려가지 않게)
+  - PaddleOCR 경로는 무접촉(자체 detector가 스케일을 다룸).
+- **가드**: `smoke_tests.py::test_ou1_adaptive_upscale`
+  (합성 렌더 11px 텍스트 → 트리거 조건 성립 + 확대 후 정확 인식 라인 증가 + bbox가 원본 좌표계(x≈20)로 환원 + `_tess_lines` 2회 호출 AST 검사).
+- **튜닝 레버**: `OCR_UPSCALE_TRIGGER_PX`(↑ 더 자주 확대=느림 / ↓ 덜 확대), `OCR_UPSCALE_FACTOR`(3 이상은 이득 미미).
+
+### LG-1. 언어 오판 파편화 → m2m100 폴백 낭비 + 쓰레기 번역
+- **증상**: 영어 한 화면인데 상태줄에 `[de, en, pt, so]`처럼 언어가 파편화되고, 그 줄들은 번역이
+  느리거나(5초대) 엉뚱하게 나오거나 아예 안 뜬다.
+- **원인**: OU-1의 작은 글씨 붕괴로 생긴 철자 쓰레기(`Sir mail pot fying aw`)를 langdetect가
+  cy/hu/de/pt/so로 판정 → M-5 라우팅이 opus-mt 등록 쌍을 못 찾아 **m2m100 폴백**으로 새고,
+  배치가 언어별로 쪼개져 generate 호출이 늘어난다. M-7 region 투표는 **region 안**만 보므로
+  같은 region의 이웃도 같이 오판되면 못 잡는다.
+- **수정**: `assign_region_languages` — M-7 region 투표 **뒤에** 페이지 전역 스냅을 얹는다.
+  1. 확신(`_language_confidence` ≥ 2) 있는 **라틴 스크립트 라인만**의 가중 다수결로 지배 언어를 구한다.
+  2. 지배 비중이 `DOMINANT_LANG_MIN_SHARE`(0.6) 이상이고 **지배 언어가 라틴 계열**일 때만,
+  3. 확신 `≤ DOMINANT_LANG_SNAP_MAX_CONF`(2)인 **라틴 스크립트 라인**의 언어를 지배 언어로 스냅.
+  - 한/일/중/러/아랍 등 **비라틴 스크립트 라인은 절대 스냅하지 않는다** — 진짜 다국어 화면 보존(UX-2).
+    지배 언어가 비라틴(`_SCRIPT_TO_LANG.values()`)이면 스냅 자체를 건너뛴다(영어 줄이 한국어로 끌려가지 않게).
+  - **투표 모집단도 라틴 라인으로 한정한다 (자체 검수 보강)**. 초안은 비라틴 라인까지 투표에 넣어,
+    영문 3줄(conf 2) + 파편(conf 2) + 한국어 1줄(conf 4)이면 en 비중이 `6/12 = 0.5`로 희석되어
+    임계 미달 → **스냅이 통째로 꺼졌다**. 한국어 UI가 섞이는 실사용 조건에서 기능이 상시 무력화되는 구조.
+    비라틴은 애초에 스냅 대상이 아니므로 지배 판정에 거부권을 가져선 안 된다.
+  - 확신 3(라틴 짧은 힌트 적중, 예: "Merci"/"Hvala")은 건드리지 않아 M-7 기존 동작이 그대로 유지된다.
+  - `batch_translate` / M-8 sepvoc 인코딩은 무접촉 — 입력 언어 리스트만 정돈된다.
+- **효과 (doc_55 실측)**: `{en:34, no:1, de:1}` → `{en:36}`. 전 라인이 opus-mt 단일 경로로 묶여
+  배치 1회로 끝나고, 파편 줄의 번역 품질도 회복.
+- **가드**: `smoke_tests.py::test_lg1_dominant_language_snap`
+  (영문 8줄 + 붕괴 파편 2줄 → 전부 en 수렴 / 한국어 줄은 ko 유지 / src 명시 시 강제 유지 /
+  **영문 3줄 + 파편 2줄 + 고확신 한국어 1줄** → 파편이 en으로 스냅되고 ko는 보존 = 희석 회귀 가드).
+  기존 `test_m7_region_smoothing`(다국어 4개 언어 혼재)이 회귀 가드로 같이 돈다.
+- **튜닝 레버**: `DOMINANT_LANG_MIN_SHARE`(↑ 보수적), `DOMINANT_LANG_SNAP_MAX_CONF`(3으로 올리면 라틴 힌트까지 스냅 — 권장 안 함).
+
+### OS-1. OSD script 오판 1회가 세션 전체를 오염 (영어 문서 → 아랍어 번역) ⭐
+- **증상**: 영어 PDF를 띄웠는데 상태줄 언어가 `[ar]`, 오버레이에는 "엘리자베스 엘리자베스 …"(×12),
+  "억원, 억원 …"(×16) 같은 반복 쓰레기가 뜬다. 창을 바꿔도 한동안 안 돌아온다.
+- **원인 사슬 (사용자 실기 재현 + 검증 실험으로 확정)**:
+  1. `_detect_script_via_osd`가 `pytesseract.image_to_osd`의 `script`를 **신뢰도 검사 없이** 채택.
+     OSD는 근거가 빈약해도 항상 어떤 script를 돌려준다.
+  2. 영어 PDF에서 한 번 `Arabic` 오판 → `_script_cache[hwnd]`(TTL 30초)에 **고착**.
+  3. 이후 모든 프레임이 `ara` 데이터로 OCR → 아랍 글자 쓰레기(`5 لاع هنالاعا- )5310`).
+  4. `identify_language`가 전 줄을 `ar`로 판정 → M-5 라우팅이 m2m100 `ar→ko` 폴백 →
+     의미 없는 입력에 대해 신경망이 같은 구를 무한 반복(RP-1)해 오버레이에 뿌림.
+  5. **성공 시 로그가 없어서**(실패만 `print`) 어느 단계에서 샜는지 추적 불가 — 진단이 오래 걸린 이유.
+- **수정 (4겹, 앞 단계일수록 근본)**:
+  1. **신뢰도 게이트** — `osd["script_conf"]`가 `OSD_SCRIPT_MIN_CONF`(1.0) 미만이면 `script=None` 반환
+     → 기존 eng+kor 폴백 경로. `script_conf` 키가 없거나 파싱 실패면 기존 동작(신뢰) 유지(구 tesseract 호환).
+     반환형이 `script` → `(script, conf)` 튜플로 바뀜(호출부는 `_smart_lang_for_image` 하나).
+  2. **eng 상시 합류** — `_SCRIPT_TO_TESS` 후보에 `eng`가 없으면 항상 추가(Arabic → `ara+eng`).
+     라틴 글리프는 eng 패턴이 이기므로 **OSD가 틀려도 영어 단어는 영어로 인식**되어 사슬이 1단계에서 끊긴다.
+     이번 수정의 핵심 안전망 — 게이트를 뚫는 고확신 오판까지 커버한다.
+  3. **관측성** — 성공 경로에도 `[INFO] OSD script=… conf=… → langs=…` 1줄.
+     OSD는 캐시 miss(hwnd별 TTL)에서만 도니 핫 패스 print 아님(P-6 위반 아님).
+  4. 게이트를 통과한 결과만 `_script_cache`에 들어가므로 오판 고착 자체가 사라진다.
+- **가드**: `smoke_tests.py::test_os1_osd_confidence_gate_and_eng_fallback`
+  (저확신 Arabic → `ara` 미사용 + eng 폴백 / 고확신 Arabic → `ara+eng` / `script_conf` 키 없음 → 기존 동작).
+  `pytesseract.image_to_osd`를 monkeypatch해 **실동작**으로 검사(AST 문자열 검사 아님).
+- **튜닝 레버**: `OSD_SCRIPT_MIN_CONF`(↑ 엄격 = 폴백 잦음/안전, ↓ 관대 = 오판 통과).
+  실측상 확신 있는 판정은 2~40대, 근거 빈약이면 1 미만.
+
+### RP-1. 잡음 입력에서 번역이 같은 구를 무한 반복 (반복 붕괴)
+- **증상**: "엘리자베스 엘리자베스 …"(×12), "억원, 억원 …"(×16)처럼 한 단어/구가 박스를 채운다.
+- **원인**: greedy decoding(`num_beams=1, do_sample=False`)의 고전적 degeneration.
+  의미 없는 입력(OS-1의 아랍 쓰레기)에서 모델이 같은 구를 반복하는 상태로 빠지면 EOS까지 못 간다.
+- **수정**: `OpusMtTranslator.translate_batch` / `M2M100Translator.translate_batch`의 `generate(...)`에
+  `no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE` **한 줄씩만** 추가. 번역 파이프라인 구조
+  (M-8 sepvoc 인코딩·배치·M-5 라우팅·캐시)는 무접촉.
+- **값 선택 근거 (4, 3 아님)**: 주기 p의 반복은 길이 `n+p`만 넘으면 n-gram이 중복되므로
+  **n=4도 모든 반복 루프를 잡는다**. 반면 n=3은 한 라인에 두 문장이 들어올 때
+  정상 한국어의 합법적 반복까지 깬다 — 실측: `"이 회사는 올해 새로운 정책을 발표했다. 이 회사는 모든
+  사무실에 적용했다."`에서 `"이 회사는"`이 두 번 나오는데, 이는 3-gram 금지에 걸릴 수 있는 패턴이다.
+  n=4에서 이 문장이 그대로 보존됨을 실모델로 확인. 억제를 더 세게 하려면 3으로 내릴 수 있다.
+- **가드**: `smoke_tests.py::test_rp1_no_repeat_ngram_guard`
+  (두 translate_batch에 파라미터 존재 확인 + 실모델이 있으면 정상 영어 문장 1개를 번역해
+  한글이 나오고 같은 토큰이 3연속 반복되지 않는지 = 품질 회귀 1차 가드. 모델 없으면 skip).
+- **튜닝 레버**: `NO_REPEAT_NGRAM_SIZE`(↓3 강한 억제/정상 문장 왜곡 위험, ↑5 관대).
+
+### SL-1. auto 모드 언어 라우팅 결정론화 — "다국어 자동 추측" 퇴역 (설계 결정) ⭐
+- **성격**: 버그 수정이 아니라 **범위를 줄이는 설계 결정**. 무엇을 버렸는지·왜·어떻게 되돌리는지를 남긴다.
+- **버린 것 (auto 경로 한정)**:
+  1. OSD script 판별 — `_detect_script_via_osd` / `_smart_lang_for_image` / `_script_cache` /
+     `_SCRIPT_TO_TESS` / `OSD_SCRIPT_MIN_CONF` **삭제**. auto OCR 언어는 `eng+kor` 고정.
+  2. langdetect 추측 — `from langdetect import ...` / `DetectorFactory.seed` / `_LANGDETECT_TO_ISO` /
+     `_LATIN_SHORT_HINTS` / `_latin_hint` / `_safe_detect` **삭제**. `identify_language`는
+     `_SCRIPT_TO_LANG.get(script, "en")` 한 줄 — 스크립트로 확정되는 언어만 인정한다.
+  3. M-7 region 투표(`_cluster_text_regions`, `_language_confidence`)와 LG-1 지배 언어 스냅
+     (`DOMINANT_LANG_MIN_SHARE`, `DOMINANT_LANG_SNAP_MAX_CONF`) — 둘 다 "라틴 추측의 오차를
+     사후 보정"하는 장치였다. 추측이 사라지면 보정할 대상도 없어 함께 **삭제**(dead code 방지).
+- **버린 이유 (실증)**: 하루 실사용에서 오판 6종(cy/hu/de/pt/so/ar) 확인. 결정타는 영어 PDF를
+  OSD가 `Arabic` **conf 3.95**로 판정한 사례 — OS-1의 신뢰도 게이트(1.0)를 정면으로 통과했다.
+  대가는 일부 줄 `ara` OCR 쓰레기 + m2m100 `ar→ko` 5초 배치. 즉 **게이트로는 못 막는다**.
+  기대 이득(진짜 다국어 화면 자동 대응)은 사용자 실사용(영어 화면 → 한국어)에 존재하지 않았고,
+  비용(오판 1건 = 그 프레임 전체 붕괴 + 사이클 지연)만 상시 발생했다.
+- **새 규약 (auto)**:
+  1. OCR 언어 = `OCR_LANGS_AUTO_DEFAULT`(`eng`+`kor`, 가용한 것만). 판별 호출 자체가 없다.
+     `kor` traineddata가 없으면 `eng` 단독 폴백(기존 패턴).
+  2. 라인 언어 = 문자 스크립트가 결정적인 것만(`_SCRIPT_TO_LANG`: 한글→ko, 가나→ja, CJK→zh,
+     키릴→ru …). **라틴·불명은 전부 `en`.** 오판이 원리적으로 불가능한 판정만 남긴 것.
+  3. m2m100 폴백은 사용자가 src 콤보에서 en/ko 외를 명시했거나, 스크립트로 확정된 비라틴
+     (ja/zh/ru…)에서만 켜진다. 라틴 오판으로 새는 경로가 없어졌다.
+  4. tgt=Korean이고 라인이 ko로 판정되면 `src == tgt` → 번역 스킵(기존 동작 유지).
+- **트레이드오프(명시)**: 프랑스어/독일어/스페인어 화면을 auto가 **더 이상 자동 인식하지 않는다**.
+  전부 en으로 번역을 시도한다. 그런 화면은 **source 콤보에서 언어를 명시**하면 기존 경로가 그대로
+  동작한다(OCR 언어도 그 언어로, 번역도 m2m100/opus-mt 정상 라우팅). 수동 탈출구:
+  `COCKTAIL_OCR_LANGS_AUTO=eng+jpn` 같은 환경변수 오버라이드도 유지.
+- **속도**: 사이클에서 OSD 호출(실측 111ms/회, 캐시 miss마다)과 langdetect(15라인 프레임 실측
+  ~130ms, 라인당 ~9ms)가 사라진다. 더 큰 이득은 오판이 유발하던 m2m100 폴백 배치(1건당 ~5초)와
+  모델 로드가 통째로 없어지는 것.
+- **가드**: `smoke_tests.py::test_sl1_deterministic_line_languages`(영/한/일 혼합 라인이
+  `[en, ko, ja]`로만 나오고, 라틴은 무엇이 와도 en / src 명시는 그대로),
+  `::test_sl1_no_guessing_engines_in_auto_path`(AST로 langdetect import 잔재 검사 +
+  `image_to_osd`/`_script_cache`/`_SCRIPT_TO_TESS` 문자열 잔재 검사 + 탈출구 유지 확인).
+  `pre_release_check.py::check_sl1_auto_language_routing`도 같은 잔재를 막는다.
+- **남겨둔 것**: `langdetect` 패키지 자체는 requirements/build.spec에 그대로 둔다(복원 시 import 한 줄).
+  앱은 더 이상 import하지 않으므로 `--self-test` 필수 모듈 목록에서만 뺐다.
+  `osd.traineddata`도 설치본에 남지만 미사용(무해).
+- **복원 조건 (되살릴 때 이 3개를 먼저 확인)**:
+  1. 사용자 시나리오가 실제로 다국어가 되었는가? (영어 단일이면 복원 이득 0)
+  2. 새 판별기가 **오판율을 근거로** 검증되었는가? conf 게이트는 이미 실패했다 —
+     신뢰도 수치가 아니라 "오판 시 무엇이 무너지는가"로 평가할 것.
+  3. 오판이 나도 **그 프레임만** 손상되는가? (캐시 고착·배치 분할처럼 번지는 구조면 채택 금지)
+  복원 방법: 이 커밋의 삭제분을 되살리거나, 더 나은 판별기(예: 라인 단위 fastText LID)를
+  `identify_language`의 라틴 분기에만 얹는다. 나머지 파이프라인은 손댈 필요 없다.
+
+### DG-1. 표시 직전 최종 게이트 — "확신 없으면 숨긴다" ⭐
+- **증상**: 초소형 캡션(7px대)에서 OCR이 **말이 되는 오독**을 하면 NZ-1(원문 문자 구성)을
+  그대로 통과해 "마우 냄비 thang에"류 그럴싸한 쓰레기가 오버레이에 뜬다. OU-1의 2배 확대로도
+  살아나지 않는 영역이 남는다(확대해도 원본 정보가 없으면 복구 불가).
+- **원인**: 필터가 전부 **번역 이전**에만 있다. NZ-1은 원문의 길이/문자 비율/평균 conf만 보는데,
+  철자가 붕괴해도 "그럴듯한 단어열"이면 전부 정상으로 보인다. 번역 결과 자체를 본 적이 없었다.
+- **수정**: `display_gate_reject(src, tgt, tgt_lang, line_px, conf)` — 표시 직전(new_state 구성
+  시점) 마지막으로 "이 줄을 믿을 근거가 있는가"를 묻고, 없으면 **그 줄만 그리지 않는다**.
+  1. **극소 라인 + 저 confidence** — `line_px < DISPLAY_TINY_LINE_PX`(12) **그리고**
+     `conf < DISPLAY_TINY_LINE_MIN_CONF`(70). 두 조건 동시 성립일 때만이라 큰 글씨는 conf가 낮아도 산다.
+  2. **목표 언어 스크립트 실종** — 번역문 글자 중 목표 언어 스크립트 비율이
+     `DISPLAY_MIN_TGT_SCRIPT_RATIO`(0.3) 미만이면 번역이 실패한 것(한국어 목표인데 한글 없음).
+     고유명사가 라틴으로 남는 정상 문장은 0.3 임계를 여유 있게 넘는다.
+  3. **길이 붕괴** — 원문이 `DISPLAY_LEN_COLLAPSE_MIN_SRC`(20)자 이상인데 번역문이
+     `DISPLAY_LEN_COLLAPSE_RATIO`(0.15)배 미만 = 모델이 입력을 버린 것.
+- **conf 배선**: 라인 튜플 계약 `(text, bbox, font_size)`은 Paddle/UIA와 공용이라 **바꾸지 않았다**.
+  `_lines_from_tess(data, scale, conf_out)` 선택 인수로 라인별 평균 conf를 병렬 리스트에 채워
+  `BackgroundController._ocr_line_confs`로 전달한다. UIA는 conf 없음(None) → 규칙 1이 자동 무효.
+- **관측**: 숨긴 줄 수를 상태줄에 `· 숨김 N줄(DG-1)`로 표시(핫 패스 print 아님).
+- **가드**: `smoke_tests.py::test_dg1_display_gate` — 정상 5종이 **통과**하는 것까지 검사
+  (거짓 양성이 곧 기능 상실이라 이쪽이 더 중요), 숨겨야 하는 6종은 거부 사유 반환.
+- **튜닝 레버**: 위 5개 상수 + `DISPLAY_GATE_ENABLED`(False면 게이트 전체 무효, 디버그용).
+- **재발 방지**: 표시 경로를 새로 만들면(예: 새 OCR 백엔드) 이 게이트를 반드시 경유시킨다.
+  임계를 올릴 땐 "정상 줄이 사라지지 않는가"를 먼저 본다 — 숨김은 무음 실패라 사용자가 원인을 못 찾는다.
+
+### LM-1. 대형 폰트 뭉침 라인 — word 높이 이상치 + 두 단 병합 ⭐
+- **증상**: 특정 라인이 화면 1/3을 덮는 거대 폰트로 뭉쳐 나온다(예: "공군. 나치 군대가 1940에서…").
+- **원인 (렌더 이미지 재현으로 확정, 개발 PC 2026-08-02)** — 둘 다 `_lines_from_tess`에 있었다:
+  1. `font_size = max(word height)`. 라인에 장식 글자나 **도형**이 섞이면 그 하나가 라인 전체의
+     폰트·bbox를 끌고 간다. 실측: 세로 기둥(그래프 축/이미지 테두리)이 `"|"` height **81px**로 잡혀
+     본문 14px 라인이 `font=81, bbox 높이 81` → 오버레이 초기 폰트 **73px**.
+     60px 장식 "W"가 본문에 붙은 경우도 `font=43`.
+  2. `--psm 6`(균일 블록)은 **좌우 두 단**을 한 라인으로 묶는다. 실측: 255px 간격을 건너뛰어
+     `'left column sentence here right column other text'` 한 줄, bbox 폭 **645px**.
+- **수정**: `BackgroundController._line_segments(words)` 신설 — 라인의 word들을
+  (a) 높이 중앙값의 `OCR_WORD_HEIGHT_OUTLIER_RATIO`(2.5)배를 넘는 word 제거,
+  (b) 가로 간격이 `중앙값 높이 × OCR_LINE_SPLIT_GAP_RATIO`(3.0)를 넘으면 별개 라인으로 분할.
+  이후 세그먼트별로 기존 NZ-1 필터(평균 conf / 문자 구성)를 그대로 적용하고,
+  `font_size`는 `max` → **중앙값**으로 교체한다.
+- **실측(수정 후)**: `font 81 → 11`, `bbox 높이 81 → 14`, 두 단은 2줄로 분리(폭 645 → 167/144).
+- **부수 영향**: OU-1의 업스케일 트리거는 라인 높이 **중앙값**을 보는데, font_size가 max에서
+  중앙값으로 내려가 트리거가 약간 더 자주 걸린다(작은 글씨를 더 잘 살리는 방향이라 무해).
+- **가드**: `smoke_tests.py::test_lm1_line_merge_and_font_outlier`
+  (합성 word 데이터로 이상치 제거·간격 분할 + 실제 렌더 이미지 E2E로 폰트/폭/높이 상한 검사).
+- **튜닝 레버**: `OCR_WORD_HEIGHT_OUTLIER_RATIO`(↓ 공격적, 큰 제목 글자가 잘릴 위험),
+  `OCR_LINE_SPLIT_GAP_RATIO`(↓ 더 잘게 쪼갬 — 넓은 자간 문서에서 문장이 끊길 위험).
+- **재발 방지**: OCR 라인 통계를 쓸 때 `max`/`평균`은 이상치에 무방비다. 중앙값을 기본으로 하고,
+  "한 라인"을 Tesseract의 line_num만 믿지 말 것 — psm에 따라 물리적으로 떨어진 텍스트가 묶인다.
+
+### TM-1. 오버레이가 다른 항상-위 창에 가려짐
+- **증상**: 번역 자막이 떠 있다가 런처/미디어 플레이어 컨트롤 등이 뜨면 그 뒤로 숨는다.
+- **원인**: `Qt.WindowStaysOnTopHint`는 창을 topmost **밴드에 넣을 뿐**이고, 그 밴드 안의
+  Z-order는 나중에 올라온 창이 이긴다. 우리는 생성 이후 한 번도 Z-order를 되찾지 않았다.
+- **수정**: `set_window_topmost(hwnd)`(`SetWindowPos(HWND_TOPMOST, SWP_NOSIZE|NOMOVE|NOACTIVATE)`)
+  + `OverlayWindow` show() 직후 `raise_()` 1회 + `QTimer`로 `OVERLAY_TOPMOST_INTERVAL_MS`(2000ms)마다 재적용.
+  `SWP_NOACTIVATE`라 포커스를 뺏지 않는다(사용자가 치던 창을 방해하면 안 됨).
+  D-1 교훈대로 `argtypes`를 명시했다 — 64비트에서 `HWND_TOPMOST(-1)`을 32비트 int로 넘기면 상위 비트가 쓰레기가 된다.
+- **한계(문서화)**: **전체화면 독점(exclusive fullscreen) 앱 위에는 원리상 어떤 창도 못 올라간다.**
+  게임/영상 전체화면은 테두리 없는 창 모드(borderless windowed)로 바꿔야 자막이 보인다.
+- **튜닝 레버**: `OVERLAY_TOPMOST_INTERVAL_MS`(0이면 주기 재적용 OFF, 수동 raise_만).
+
+### FT-1. 오버레이 폰트 "Arial" 하드코딩 (한글 글리프 없음)
+- **증상**: 한국어 자막의 자간/굵기가 화면마다 들쭉날쭉하고 글자가 어색하게 섞여 보인다.
+- **원인**: `QFont("Arial")`은 한글 글리프가 없어 Qt의 임의 폴백 폰트에 맡겨진다(환경마다 다름).
+- **수정**: `OVERLAY_FONT_FAMILIES = ("Malgun Gothic", "Noto Sans KR", "Segoe UI", "Arial")`
+  + `OverlayWindow._overlay_font(px)` 헬퍼(`setFamilies` + F-2의 `setPixelSize`)를 신설해
+  `_fit_font`/`_draw_one`이 **같은 헬퍼 하나**를 쓰게 했다.
+- **실측**: 개발 PC에서 `QFontInfo` 해석 결과 `Malgun Gothic`.
+- **재발 방지**: 폰트를 만드는 자리가 둘 이상이면 반드시 헬퍼로 모을 것. 크기는 항상 `setPixelSize`(F-2).
+
+### RC-1. 비우기 판정이 지연된 메인 스레드 상태를 읽음 (잔상 영구화 race)
+- **증상**: 잠재 결함(감사 #8). 타이밍에 따라 자막이 사라져야 할 때 화면에 영구히 남는다.
+- **원인**: 워커의 `if self.translated_text: self.state_ready.emit([])` 판정 5곳이,
+  **메인 스레드 큐드 슬롯**(`_apply_state_to_self`)이 갱신하는 `translated_text`를 읽는다.
+  워커가 상태를 emit한 직후 슬롯이 아직 안 돌았으면 `translated_text`는 여전히 옛 값(빈 리스트)이라
+  "비울 게 없다"고 오판해 `emit([])`을 건너뛴다 → 오버레이는 마지막 상태로 고정.
+  RT-2의 `_emit_state_if_changed` 비교 기준도 같은 값이라 같은 함정을 공유했다.
+- **수정**: 워커가 "마지막으로 emit한 상태"를 자기 로컬 `self._last_emitted`로 추적한다.
+  emit 경로를 `_emit_state(new_state)` 하나로 모으고(로컬 갱신 + 시그널 방출을 같은 자리에서),
+  일시정지/스킵 5곳은 `_clear_overlay_if_any()`, dedup은 `_emit_state_if_changed()`가 담당한다.
+  `set_running(False)`(UX-3)도 같은 헬퍼를 쓰므로 정지 → 재개 시 dedup이 잘못 걸려
+  화면이 빈 채 고정되는 2차 함정도 같이 막힌다.
+- **가드**: `smoke_tests.py::test_rc1_emit_state_uses_worker_local`
+  (메인 슬롯이 지연된 상태를 재현해 비우기가 나가는지 + 비운 뒤 같은 상태가 다시 그려지는지 +
+  워커 소스에 `if self.translated_text:` 잔재가 없는지).
+- **재발 방지**: 워커는 메인 스레드가 쓰는 상태를 **읽지도 않는다**. 워커 판정은 워커 로컬로.
+
+### GT-1. 워커 스레드에서 GUI 전용 Qt API 호출 (Qt 규약 위반)
+- **증상**: 잠재 결함(감사 #13). 모니터 핫플러그/해상도 변경 시점에 크래시 가능.
+- **원인**: `region.update_for_mode()`가 워커 루프에서 호출되는데 그 안에서
+  `QCursor.pos()`(MODE_HOVER)와 `QGuiApplication.screenAt/primaryScreen`(SC-1)을 부르고,
+  W-4 클립도 워커에서 `QApplication.screens()`를 열거했다. Qt 화면/커서 API는 GUI 스레드 전용이다.
+- **수정** (최소 변경):
+  1. 화면 rect는 **메인 스레드가 캐시**한다 — `CaptureRegionController.screen_rects`
+     (`(l, t, r_excl, b_excl)` 튜플, 절대/물리 픽셀). `refresh_screen_rects()`는 생성 시 +
+     MS-1 시그널에서만 호출. 워커는 `screen_rect_at()` / `virtual_desktop_rect()`로 **읽기만** 한다.
+     Qt의 `right()/bottom()` = 마지막 픽셀 규약은 캐시를 만들 때 한 번만 흡수한다(호출부에서 +1 금지).
+  2. 커서는 `cursor_pos_physical()` — win32 `GetCursorPos`. 스레드 무관이고, 프로세스가
+     per-monitor DPI aware라 반환값이 **물리 픽셀** → DP-1 규약과 그대로 정합.
+- **가드**: `test_w4_w5_multi_monitor_capture`(워커 소스에 `QApplication.screens()` 잔재 0),
+  `test_sc1_active_screen_clamp`(판정이 캐시 기반인지 + 캐시 갱신이 screens()/primaryScreen()인지).
+- **재발 방지**: 워커에 Qt 객체를 새로 끌어들이지 말 것. 필요하면 메인 스레드가 계산해 **값**으로 넘긴다.
+
+### MS-1. 모니터 구성 변경에 오버레이/캡처 좌표가 안 따라옴
+- **증상**: 감사 #5 잔여. 모니터를 꽂거나 빼거나 해상도를 바꾸면 오버레이 창이 옛 가상 데스크톱
+  크기 그대로라 자막이 화면 밖에 그려지거나 잘린다.
+- **원인**: `OverlayWindow._fit_to_screen` / `RegionEditor._fit_to_virtual_desktop`이 **생성 시 1회**만 돈다.
+- **수정**: `CocktailAppController._wire_screen_changes()` — `screenAdded` / `screenRemoved` /
+  각 화면의 `geometryChanged`를 `_on_screens_changed`에 연결하고, 거기서
+  (a) `region.refresh_screen_rects()`(GT-1 캐시), (b) `overlay._fit_to_screen()` + `update()`,
+  (c) 열려 있는 `RegionEditor._fit_to_virtual_desktop()`을 함께 수행한다.
+  새로 붙은 화면의 `geometryChanged`도 매번 다시 훑어 연결한다(연결한 QScreen을 집합으로 기억 —
+  `Qt.UniqueConnection`은 수신자가 QObject일 때만 확실하다).
+- **책임 위치**: 생성/연결은 `CocktailAppController`(ARCHITECTURE.md §2.1 규약대로), 상태는 `region`.
+- **재발 방지**: "생성 시 1회 계산하는 화면 의존 값"을 추가하면 이 시그널 3종에도 같이 물릴 것.
+
+### CL-1. 그리기 클립이 가상 데스크톱 전체 기준
+- **증상**: 감사 #11. 모니터 경계에 걸친 자막이 옆 모니터로 흘러넘치고, 모니터가 없는
+  가상 데스크톱의 빈 영역(비대칭 배치에서 생기는 틈)에도 박스가 그려질 수 있다.
+- **원인**: `OverlayWindow._draw_one`의 클립이 `self.rect()` = 가상 데스크톱 전체.
+  B-12에서 red_rect → 위젯 전체로 넓힌 뒤 모니터 경계는 고려된 적이 없다.
+- **수정**: `_clip_for_abs_bbox(abs_bbox, wx, wy)` — 박스 **중심이 속한 모니터**(GT-1 캐시)를
+  창 rect와 교차해 overlay-내 좌표로 돌려주고, `_draw_one(..., clip_rect)`가 그걸로 클립한다.
+  어느 모니터에도 안 속하는 좌표는 primary로 폴백되어 결과적으로 교집합이 비어 **안 그려진다**.
+- **재발 방지**: 오버레이는 가상 데스크톱 전체를 덮는 단일 창이다 — "창 안"이 "화면 안"을 뜻하지 않는다.
+
+### SV-1. UIA 민감 창 폴백이 OCR 경로를 열어 둠 (보안 결함) ⭐
+- **증상**: 감사 #12. 민감 창(패스워드/결제/은행)이 UIA 경로에서 차단됐는데도 그 프레임이
+  **OCR로 계속 진행**되어 캡처·OCR·번역되고, 번역 결과가 DPAPI 영구 캐시에까지 남는다.
+- **원인**: `_uia_collect_and_translate`의 반환 의미가 뭉뚱그려져 있었다. 민감 창에서 `[]`를
+  돌려주는데 호출부는 `if uia_state is not None and uia_state:`로 판정하므로 `[]` = "UIA 실패"
+  → 아래 OCR 경로로 그대로 흘러간다. S-1 가드는 `capture_mode != MODE_BOX`에서만 도니
+  **MODE_BOX + UIA 명시 선택** 조합에서는 두 번째 방어선도 없었다.
+- **수정**: 반환 의미를 3종으로 분리 — `UIA_SKIP_FRAME`(민감 창 = **이 프레임 전체 스킵**),
+  `None`(UIA 불가/추출 실패 → OCR 폴백 OK), `list`(정상). 호출부는 sentinel이면
+  1초 대기 후 `continue` — OCR 캡처(`ImageGrab.grab`)에 **도달하지 않는다**.
+  오버레이 비우기/상태 메시지/`_sensitive_paused` 플래그는 S-1 경로와 동일하게 유지.
+- **가드**: `smoke_tests.py::test_sv1_uia_sensitive_blocks_ocr_fallback`
+  (민감 창을 흉내 내 sentinel 반환 실동작 확인 + 호출부 분기 존재 + sentinel 처리가
+  `ImageGrab.grab`보다 **앞선 줄**인지 소스 순서 검사).
+- **재발 방지**: 보안 가드의 반환값에 "실패"와 "차단"을 같은 값으로 쓰지 말 것.
+  차단은 반드시 **호출부가 구분할 수 있는 별도 타입**으로 표현한다.
+
+### RB-1. `run_cocktail.bat`이 패키지 없는 시스템 Python을 잡아 실패 ⭐
+- **증상**: 사용자가 `run_cocktail.bat`을 더블클릭하면 앱이 안 뜬다. "제품"의 첫 관문이 막힘.
+- **원인**: 배치가 그냥 `python`을 호출했다. PATH에 먼저 잡히는 건 시스템 Python 3.13이고
+  거기엔 PySide6/torch/transformers가 **하나도 없다**. 앱 코드는 멀쩡한데 실행이 안 되는 상태.
+  진단(`diagnose_environment.py`)도 같은 잘못된 인터프리터로 돌아 원인 파악을 늦춘다.
+- **수정**: 우선순위 탐색으로 교체. ① `COCKTAIL_PYTHON`(사용자 지정 — 있으면 무조건 존중)
+  → ② `%USERPROFILE%\anaconda3|miniconda3\envs\cd\python.exe` → ③ `py -3.11` → ④ PATH `python`.
+  ②~④ 후보는 **`import PySide6`가 되는지**로 판별한다(단순 "python이 실행되는가"로는
+  바로 이 버그를 못 거른다). 전부 실패하면 조치 2가지를 찍고 `pause`.
+  `diagnose_environment.py`도 앱과 같은 규칙으로 `./tessdata`를 `TESSDATA_PREFIX`에 걸어,
+  앱은 kor을 보는데 진단만 "eng, osd"라고 보고하던 불일치를 없앴다.
+- **함정(실증)**: 배치 파일에 **한글을 넣으면 안 된다**. cmd는 배치를 콘솔 OEM 코드페이지
+  (한국어 Windows = CP949)로 읽는데 파일이 UTF-8이면 주석·경로·메시지가 깨져 파싱까지 무너진다.
+  그래서 `run_cocktail.bat`은 ASCII 전용이고 한국어 안내는 `ENVIRONMENT.md`가 맡는다.
+  (cmd 자신이 찍는 `pause` 프롬프트는 OS가 한국어로 출력하므로 문제 없음.)
+- **검증**: 3분기 실측 — 정상(anaconda `cd` env 선택 → 앱 기동),
+  `COCKTAIL_PYTHON`을 패키지 없는 3.13으로 강제(지정 존중 + 진단이 결손 모듈 보고 + 에러 pause),
+  후보 전멸(`PATH`/`USERPROFILE` 무력화 → 안내 메시지 + pause).
+
+### DR-1. 사어(死語) 의존과 과장 문구가 문서·빌드에 남음
+- **증상**: SL-1에서 코드에서 걷어낸 `langdetect`가 `requirements.txt`, `build.spec`,
+  `diagnose_environment.py`, `pre_release_check.py` 4곳에 살아 있었다. 쓰지도 않는 패키지를
+  설치 요구하고, PyInstaller가 번들에 넣고, 진단은 없으면 "필수 모듈 누락"이라고 겁을 준다.
+  같은 결로 `osd.traineddata`(OSD script 판별 퇴역)도 인스톨러 컴포넌트·다운로드 목록에 남아 있었다.
+  문서는 "100% 로컬 처리, 어떤 데이터도 외부로 나가지 않습니다"라고 했지만 실제로는
+  최초 1회 모델 다운로드 + Tesseract 별도 설치가 필요하다.
+- **수정**: 4곳 전수 제거(가드인 `smoke_tests.py`/`pre_release_check.py`의 **잔재 검사**는 유지 —
+  그건 되살아나는 것을 막는 장치다). `LICENSE-3RDPARTY.md` §6은 "제3자 컴포넌트 없음"으로 교체.
+  `download_tessdata.py`/`installer.iss`에서 osd 제외(파일 자체는 보존).
+  문구는 "인식·번역 전 과정 로컬 처리(화면/번역 데이터 외부 전송 없음), 단 최초 1회 모델
+  다운로드 + Tesseract 설치 필요"로 사실화(README/README.en/VISION/HANDOFF/release.yml).
+- **재발 방지**: 의존성은 **코드에서 지웠다고 끝이 아니다.** 위 4곳 + 라이선스 문서 + 인스톨러가
+  한 세트다. 그리고 마케팅 문구는 네트워크를 한 번이라도 쓰면 "100%"라고 쓰지 않는다.
+
 ## 5. 변경 이력
 
 - 2026-04-30: 초기 작성 (Cocktail완성본.py 1차 리뷰). P-1 ~ P-8, B-1 ~ B-6, E-1 ~ E-5 식별.
@@ -718,3 +1428,144 @@
   `.github/workflows/release.yml`(태그 push → PyInstaller 빌드 → GitHub Release), `README.en.md`.
   박사 자체 리뷰 잠재 결함 4건 기록(콘솔 창 / 메인 스레드 save / Inno Setup 자동화 / LICENSE 결정).
   5초 체크리스트에 4개 항목 추가.
+- 2026-05-04: CR-1 크리티컬 리뷰 수정.
+  워커 스레드 시작 코드가 QTimer slot 내부로 들어간 치명적 들여쓰기 결함 수정.
+  캡처 affinity 토글을 ControlWindow+OverlayWindow 양쪽에 적용.
+  활성 창/민감 창 자기 hwnd 가드에 OverlayWindow 포함.
+  UIA 번역 경로에도 M-7 region smoothing 적용.
+- 2026-05-04: ST-1 + A-2 보강.
+  `smoke_tests.py` 추가로 다음 step 전 자동 회귀 검사 체계 확립.
+  자동 실행 명령은 `.py` 실행 시 `pythonw.exe` 우선으로 콘솔 창 회피.
+  주기적 PersistentCache save를 백그라운드 스레드로 이동하고 `_mem_lock`으로 저장/조회/갱신 경쟁 조건 완화.
+- 2026-05-04: R-1 릴리즈 워크플로우 보강.
+  GitHub Actions에서 Tesseract 설치 후 진단 실행, 서명 후 zip 생성, Inno Setup 인스톨러 자동 빌드.
+  build.spec에 사용자/라이선스 문서 포함. `pre_release_check.py` 추가.
+- 2026-05-04: 사용자 GUI 검증 피드백 — UX-1 (기본 모드 활성 창, OCR 합집합 → eng+kor, 빨간 박스 박스 모드만) +
+  B-15 (자기 캡처 자동 가드 — 운용 규칙 → 코드 자동화). 박사 자체 리뷰 보강 3건.
+- 2026-05-04: 사용자 통찰 "AI 시대인데 주먹구구는 구식" — UX-2 SmartOCR (M³ Multiplex 영감, 5-Layer).
+  Layer 1 UIA 자동 라우팅 / Layer 2 화면 클립 / Layer 3 OSD script 분류 / Layer 4 단일언어 OCR / Layer 5 hwnd 캐시.
+  예측 OCR 27초 → ~2초. Tesseract OSD 활용 (추가 의존성 0).
+  박사 자체 리뷰 결함 2건 즉시 수정 (mutable 클래스 변수, UIA 자동 라우팅이 명시 선택 무시).
+  settings.local.json 권한 강화로 박사 자율 진행 가능.
+- 2026-05-04: BG-2 앱 생명주기 컨트롤러 추가.
+  `__main__`에서 QApplication/설정창/오버레이를 직접 만들던 배포 구조 결함을 줄이고,
+  `CocktailAppController`가 생성/연결/실행을 관리하도록 변경.
+  `COMMERCIAL_SOTA_REVIEW.md` 신규 작성으로 SOTA/상용 라이선스 기준선을 문서화.
+  smoke/pre-release gate에 BG-2 구조 검사를 추가.
+- 2026-05-04: BG-3 CaptureRegionController 분리.
+  캡처 모드/hover 크기/red_rect와 활성 창/hover 영역 계산을 `TransparentWindow`에서 분리.
+  기존 호출부는 proxy property로 유지해 회귀 위험을 줄이고, 추후 `RegionEditor`가 같은 상태를 조작할 수 있게 준비.
+  smoke/pre-release gate에 BG-3 구조 검사를 추가.
+- 2026-05-04: ARCHITECTURE.md 신규 — As-Is/To-Be 클래스 다이어그램, 시그널/데이터 흐름,
+  BG-4~BG-6 마이그레이션 계획, BG-5 좌표계 결정(red_rect 절대 좌표화)을 한 곳에 모음.
+  목적: BG-N 사이클 직전에 책임 경계와 좌표계를 미리 결정해 즉흥 결정 비용 회피.
+- 2026-05-04: BG-4 BackgroundController 분리.
+  워커 thread, 엔진 시그널 5개(state_ready/failure_alert/model_ready/progress_msg/status_msg),
+  worker loop, OCR/SmartOCR/UIA 라우팅, 모델 lifecycle, 자동 일시정지 플래그,
+  PersistentCache 타이머를 `TransparentWindow`에서 분리.
+  의존 주입: `region`(CaptureRegionController), `options_provider`(callable→`RuntimeOptions`),
+  `is_self_hwnd`(callable→bool). widget 직접 참조 금지.
+  `RuntimeOptions(@dataclass(frozen=True))`로 콤보 스냅샷을 immutable로 워커에 전달.
+  TransparentWindow는 proxy property(translated_text/model_loaded/capturable)와
+  UI slot(_on_state_ready/_on_progress/_on_failure/_on_model_ready/_set_status)만 보유.
+  박사 자체 리뷰 결함 1건 즉시 수정: forward-ref 어노테이션
+  (`-> RuntimeOptions`이 클래스 정의 시점에 평가되어 NameError) → 문자열 어노테이션으로 변경.
+  smoke/pre-release gate에 BG-4 구조 검사 추가, 기존 5개 테스트 BG-4 분리에 맞춰 갱신.
+- 2026-05-04: BG-5 red_rect 좌표계 통일.
+  `red_rect`를 settings window 위젯 좌표 → **화면 절대 좌표**로 전환.
+  `CaptureRegionController.__init__` 기본값이 `QRect(240, 215, 600, 375)`(절대).
+  `update_for_mode`가 활성 창/hover 절대 좌표를 그대로 저장 (owner.geometry() 변환 제거).
+  `BackgroundController.capture_and_translate_async`에서 `region.owner.geometry()` 의존 제거.
+  `OverlayWindow.paintEvent` MODE_BOX 박스 그리기에서 `ctl.geometry().x()` 의존 제거.
+  `TransparentWindow.initUI`의 size_grip widget-coord 위치 코드 정리(grip은 hidden 상태 그대로).
+  설정 창 이동/숨김이 캡처 영역에 영향 주지 않는 구조로 정착 (백그라운드 번역기 UX에 부합).
+  smoke/pre-release gate에 BG-5 검사 추가.
+  박사 자체 리뷰 결함 1건 즉시 수정: smoke `_method` 헬퍼가 `async def`(AsyncFunctionDef)를
+  처리하지 못해 `capture_and_translate_async` 검사 실패 → `(FunctionDef, AsyncFunctionDef)` 둘 다 처리.
+- 2026-05-16: BG-7 RegionEditor 위젯 추가 (MODE_BOX 영역 마우스 편집).
+  BG-5에서 사라진 "마우스로 박스 편집" UX를 전용 위젯으로 복원. 5개 컴포넌트 분리 구조 유지.
+  `RegionEditor(QWidget)` — 가상 데스크톱 전체 frameless/translucent/always-on-top + B-10 capture 제외.
+  내부 박스 상태도 절대 좌표 QRect (BG-5 결정과 일관). paintEvent에서만 editor-내 좌표 1회 변환.
+  진입점: SettingsWindow "영역 편집..." 버튼 + 트레이 메뉴 동명 항목.
+  저장 시 `region.red_rect` 절대 대입 + `set_capture_mode(MODE_BOX)` 자동 전환 + `reset_frame_hash`.
+  취소 시 변경 사항 폐기. Esc/우클릭/취소 버튼 = cancel, Enter/저장 버튼 = commit.
+  `_is_self_hwnd`가 region_editor.winId도 자기 hwnd로 인식 → worker가 편집 창 캡처/번역 안 함 (B-10 가드).
+  민감 창 가드(S-1) / capturable 가드(B-15)는 BackgroundController에 그대로 — RegionEditor는 geometry만 변경.
+  SettingsWindow 폭 740→880 — 첫 행에 "영역 편집..." 버튼 공간 확보.
+  closeEvent에 `region_editor.force_close()` 정리.
+  smoke 19→20건 (`test_bg7_region_editor`) / pre-release 14→15건 (`check_bg7_region_editor`) 게이트 추가.
+  사용자가 `pip install -r requirements.txt` 승인 → 박사 환경에서 전체 검증 통과:
+    smoke 20/20 OK, pre-release 15/15 OK, `--self-test` OK (Tesseract + CUDA env).
+  실 GUI 회귀(드래그/리사이즈/저장/취소/MODE_BOX 자동 전환/B-10 가드)는 사용자 PC 검증 필요.
+- 2026-05-04: BG-6 SettingsWindow 리네이밍 + region 콜백 통합 + dead code 정리.
+  Phase 0 분리 사이클 종결.
+  `TransparentWindow` → `SettingsWindow` 일괄 리네이밍 (Cocktail완성본.py / smoke_tests.py /
+  pre_release_check.py / ARCHITECTURE.md / TECH_STACK.md / COMMERCIAL_SOTA_REVIEW.md).
+  `CaptureRegionController(owner)` → `CaptureRegionController(is_self_hwnd)` —
+  UI 클래스 내부 구조 의존(self.owner.winId / self.owner.overlay) 완전 제거.
+  `BackgroundController._is_self_hwnd`와 같은 콜백을 region도 공유.
+  `SettingsWindow.paintEvent` 빈 override 제거 (Qt 기본이 위젯 트리 자동 처리).
+  `_on_state_ready`에서 `self.update()` 호출 제거 (settings window는 그릴 게 없음 — overlay만 갱신).
+  smoke/pre-release gate에 BG-6 검사 추가, 기존 2건(test_overlay_hwnd_guards, test_capture_region_controller) BG-6에 맞춰 갱신.
+  ARCHITECTURE.md "Phase 0 분리 사이클 종결" 마킹.
+- 2026-08-02: 오버레이 표시 결함 6건 수정 — W-4(가상 데스크톱 클립 + 스킵 시 오버레이 비우기),
+  W-5(`ImageGrab.grab(all_screens=True)`), W-6(마우스 통과 플래그 단일 출처화),
+  UX-3(정지 시 자막 잔상 제거), F-1(frame-skip: 영역 좌표 포함 + 셀 최대 변화량 기준, RGB2GRAY 정정),
+  F-2(`setPixelSize`로 폰트 픽셀 단위 지정). smoke_tests 21→23건, 5초 체크리스트 7줄 추가.
+  번역 파이프라인(M-8 sepvoc, batch_translate) 미변경.
+- 2026-08-02(2차): 실사용 성능/표시 결함 4건 — SC-1(활성 창 모드를 활성 모니터 1개로 클램프),
+  LD-1(HF 로컬 캐시 우선 로드, 전역 오프라인 강제 금지), RT-1(캐시 키 텍스트 정규화로 재번역 폭주 차단)
+  + RT-2(실질 동일 상태 emit 생략), NZ-1(OCR 라인 confidence/실문자 비율 필터).
+  smoke_tests 23→27건, 5초 체크리스트 5줄 추가. 번역 파이프라인(M-8 sepvoc, batch_translate 라우팅) 미변경.
+- 2026-08-02(3차): DP-1 — DPI 좌표계 물리 픽셀 통일(`QT_ENABLE_HIGHDPI_SCALING=0`).
+  100%/175% 혼합 멀티 모니터에서 주 모니터에 오버레이가 아예 안 뜨던 근본 원인 해소.
+  E-7 정책 문구 갱신(수동 곱셈 금지는 유지, Qt 논리 스케일링도 OFF), ARCHITECTURE.md §1.5 단위 규약 명시.
+  smoke_tests 27→28건, 5초 체크리스트 2줄 추가. 번역 파이프라인 미변경, 1·2차 수정 유지.
+- 2026-08-02(4차): OU-1(작은 글씨 적응 업스케일 — 1차 OCR 라인 높이 중앙값 < 18px이면 2배 확대 재OCR,
+  E-3의 이미지 크기 조건이 못 잡던 "큰 화면 속 작은 캡션" 커버), LG-1(페이지 지배 언어 스냅 —
+  라틴+저확신 라인만 지배 언어로 수렴, 비라틴 보존). doc_55 실측: 캡션 블록 전멸 → 복구(33→36 라인),
+  언어 `{en:32, af:1}`/`{en:34, no:1, de:1}` → `{en:36}`.
+  smoke_tests 28→30건, 5초 체크리스트 4줄 추가. 번역 파이프라인(M-8 sepvoc, batch_translate) 미변경,
+  1~3차 수정 유지.
+- 2026-08-02(5차): OS-1(OSD script 오판이 `_script_cache`에 고착돼 세션 전체를 오염 —
+  `script_conf` 신뢰도 게이트 + 후보에 eng 상시 합류 + 성공 경로 로그),
+  RP-1(잡음 입력 반복 붕괴 — 두 `generate`에 `no_repeat_ngram_size=4`).
+  영어 PDF → OSD "Arabic" 오판 → ara OCR 쓰레기 → `[ar]` → m2m100 ar→ko 반복 쓰레기 사슬을
+  1단계(OCR 언어 선택)와 4단계(디코딩)에서 각각 차단.
+  smoke_tests 30→32건, 5초 체크리스트 5줄 추가. 번역 파이프라인 구조 무접촉
+  (generate 파라미터 1개 추가만 예외 허용), 1~4차 수정 유지.
+- 2026-08-02(6차): SL-1 — auto 모드 언어 라우팅 결정론화(설계 결정, 오판 장치 퇴역).
+  OSD script 판별(UX-2 Layer 3-5) + langdetect 추측 + M-7 region 투표 + LG-1 지배 언어 스냅을
+  **전부 삭제**하고, auto = "OCR eng+kor 고정 / 라인 언어는 스크립트 확정만, 라틴·불명은 en"으로 교체.
+  계기: 영어 PDF를 OSD가 conf 3.95로 Arabic 판정 — OS-1 신뢰도 게이트(1.0)를 통과했다(게이트로는 못 막음).
+  하루 실사용 오판 6종(cy/hu/de/pt/so/ar) 실증. 다른 언어는 src 콤보 명시로(탈출구 유지:
+  `COCKTAIL_OCR_LANGS_AUTO`). 사이클에서 OSD(실측 111ms/회)·langdetect(~130ms/15라인) 제거,
+  오판발 m2m100 폴백(~5초/배치)도 소멸. Cocktail완성본.py 3274→2949줄(-325).
+  smoke_tests 32→31건(test_m7/test_lg1/test_os1 → test_sl1 2건으로 교체, test_ux2는 UIA 라우팅만 유지),
+  pre-release `check_smartocr_wiring` → `check_sl1_auto_language_routing`.
+  5초 체크리스트 갱신(OSD/LG-1/M-7 항목 → SL-1 항목). 문서 동기화(README/README.en/TECH_STACK/
+  ARCHITECTURE/HANDOFF). 번역 파이프라인(M-8 sepvoc, batch_translate, RP-1) 무접촉, 1~5차 수정 유지.
+- 2026-08-02(7차 · 코드 완성 패스): 남은 품질·안정·보안 결함 9건 일괄 마감.
+  **표시 품질** — DG-1(표시 직전 최종 게이트: 극소 라인+저conf / 목표 스크립트 실종 / 길이 붕괴는
+  아예 안 그림), LM-1(거대 폰트 뭉침 근본 수정: word 높이 이상치 제거 + 큰 간격 분할 +
+  font_size max→중앙값. 렌더 재현 실측 font 81→11, bbox 폭 645→167/144), FT-1(한글 우선 폰트 스택),
+  TM-1(show 후 raise_ + 2초 주기 topmost 재적용, SWP_NOACTIVATE), CL-1(클립을 박스가 속한 모니터로 축소).
+  **안정성** — RC-1(워커가 메인 스레드 갱신 상태를 읽던 race → `_last_emitted` 로컬 + emit 단일 경로),
+  GT-1(워커의 GUI 전용 Qt API 호출 제거: 화면 rect 캐시 + `GetCursorPos`),
+  MS-1(모니터 추가/제거/해상도 변경에 오버레이·캐시·RegionEditor 재적합).
+  **보안** — SV-1(민감 창 UIA 차단이 OCR 폴백으로 새던 구멍을 `UIA_SKIP_FRAME` sentinel로 봉쇄).
+  smoke_tests 31→35건(신규 4 + 기존 3건을 새 배선에 맞춰 갱신), 5초 체크리스트 11줄 추가.
+  DP-1 물리 픽셀 규약·SL-1 결정론 라우팅·M-8 sepvoc·`batch_translate` 무접촉, 1~6차 수정 유지.
+- 2026-08-02(8차 · 배포 준비 패스): 코드 무접촉, "받아서 더블클릭으로 쓰는 제품"이 되기 위한
+  실행·문서·의존성 정합 마감. RB-1(`run_cocktail.bat` 인터프리터 우선순위 탐색 —
+  `COCKTAIL_PYTHON` → conda `cd` env → `py -3.11` → `python`, `import PySide6`로 판별,
+  ASCII 전용. 3분기 실측 검증), DR-1(사어 의존 전수 제거: `langdetect` 4곳 +
+  `osd.traineddata` 동봉 목록 2곳 + 라이선스 문서, 과장 문구 사실화).
+  `diagnose_environment.py`가 앱과 같은 `TESSDATA_PREFIX` 규칙을 쓰도록 수정(진단/실행 불일치 해소).
+  `ENVIRONMENT.md` 현행화(존재하지 않는 `aigugbi` 환경 → 실측 `cd` env: Python 3.11.15 /
+  PySide6 6.11.1 / transformers 5.8.1 / torch 2.11.0+cu126, Tesseract 5.5.0 `C:\tesseract`,
+  환경변수 6종, `debug_run.bat` 진단 절차). `nllb_ct2/`(600MB, CC-BY-NC)는 **삭제하지 않고**
+  배포 산출물에 안 들어감을 확인 + README/BUILD/ENVIRONMENT에 "배포 전 삭제 필요"로 명시.
+  문서 정합(HANDOFF 상태·테스트 건수 21/14→35/17·코드 3,310줄, ARCHITECTURE OCR 라우팅 표,
+  OCR_TEST_PLAN 기대 감지값 SL-1 반영, README 현재 상태에 DG-1/DP-1/멀티모니터 추가).
+  smoke_tests 35건 / pre-release 17건 / `--self-test` 전건 통과. 1~7차 수정 전부 유지.

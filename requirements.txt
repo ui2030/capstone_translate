@@ -27,8 +27,8 @@ Pillow>=10.0.0            # ImageGrab.grab — 화면 캡처
 opencv-python>=4.8.0
 numpy>=1.24
 
-# 언어 감지
-langdetect>=1.0.9
+# 언어 감지 — 별도 패키지 없음. `unicodedata` 스크립트 판정만 사용 (SL-1).
+# langdetect는 짧은 라틴 텍스트 오판이 잦아 퇴역했다.
 
 # 글로벌 단축키 (Phase 1: 트레이 상주 시 어떤 창에서든 토글, MIT 라이선스)
 # Windows에선 일부 경우 관리자 권한 필요. 미설치 시 앱은 정상 동작 (단축키만 비활성).

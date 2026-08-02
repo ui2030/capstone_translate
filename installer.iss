@@ -46,20 +46,29 @@ Name: "tess\eng";      Description: "영어 (English)";                         
 Name: "tess\kor";      Description: "한국어 (Korean)";                                      Types: full
 Name: "tess\jpn";      Description: "일본어 (Japanese)";                                    Types: full
 Name: "tess\chi_sim";  Description: "중국어 간체 (Chinese Simplified)";                     Types: full
+Name: "tess\chi_tra";  Description: "중국어 번체 (Chinese Traditional)";                    Types: full
 Name: "tess\fra";      Description: "프랑스어 (French)";                                    Types: full
 Name: "tess\deu";      Description: "독일어 (German)";                                      Types: full
+Name: "tess\rus";      Description: "러시아어 (Russian)";                                   Types: full
+Name: "tess\ara";      Description: "아랍어 (Arabic)";                                      Types: full
 
 [Files]
 ; 본체 — PyInstaller 결과물
 Source: "dist\Cocktail\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Components: main
 
-; traineddata — 사용자가 선택한 언어만 설치
+; traineddata — 사용자가 선택한 언어만 설치.
+; skipifsourcedoesntexist: download_tessdata.py가 일부 파일을 못 받아도 빌드 실패 안 함.
+; eng는 필수 — Source 누락 시 빌드 명시적 실패가 더 안전.
+; osd는 동봉하지 않는다 (OSD script 판별은 SL-1에서 퇴역).
 Source: "tessdata\eng.traineddata";     DestDir: "{app}\tessdata"; Components: tess\eng
-Source: "tessdata\kor.traineddata";     DestDir: "{app}\tessdata"; Components: tess\kor
-Source: "tessdata\jpn.traineddata";     DestDir: "{app}\tessdata"; Components: tess\jpn
-Source: "tessdata\chi_sim.traineddata"; DestDir: "{app}\tessdata"; Components: tess\chi_sim
-Source: "tessdata\fra.traineddata";     DestDir: "{app}\tessdata"; Components: tess\fra
-Source: "tessdata\deu.traineddata";     DestDir: "{app}\tessdata"; Components: tess\deu
+Source: "tessdata\kor.traineddata";     DestDir: "{app}\tessdata"; Components: tess\kor; Flags: skipifsourcedoesntexist
+Source: "tessdata\jpn.traineddata";     DestDir: "{app}\tessdata"; Components: tess\jpn; Flags: skipifsourcedoesntexist
+Source: "tessdata\chi_sim.traineddata"; DestDir: "{app}\tessdata"; Components: tess\chi_sim; Flags: skipifsourcedoesntexist
+Source: "tessdata\chi_tra.traineddata"; DestDir: "{app}\tessdata"; Components: tess\chi_tra; Flags: skipifsourcedoesntexist
+Source: "tessdata\fra.traineddata";     DestDir: "{app}\tessdata"; Components: tess\fra; Flags: skipifsourcedoesntexist
+Source: "tessdata\deu.traineddata";     DestDir: "{app}\tessdata"; Components: tess\deu; Flags: skipifsourcedoesntexist
+Source: "tessdata\rus.traineddata";     DestDir: "{app}\tessdata"; Components: tess\rus; Flags: skipifsourcedoesntexist
+Source: "tessdata\ara.traineddata";     DestDir: "{app}\tessdata"; Components: tess\ara; Flags: skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\Cocktail Translator"; Filename: "{app}\{#AppExeName}"

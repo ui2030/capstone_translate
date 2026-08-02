@@ -1,7 +1,8 @@
 # Cocktail
-1
+
 > **컴퓨터를 모국어로 보는 가장 짧은 길.**
-> 100% 로컬 처리. 어떤 데이터도 외부로 나가지 않습니다.
+> 인식·번역 전 과정을 내 PC에서 처리합니다. 화면 내용이나 번역 결과는 외부로 전송되지 않습니다.
+> 단, **최초 1회 번역 모델 다운로드(인터넷 필요)**와 **Tesseract OCR 엔진 별도 설치**가 필요합니다.
 
 ---
 
@@ -11,10 +12,11 @@
 궁극 목표는 **OS 전반의 외국어를 사용자 모국어로 자연스럽게 보이게 하는 환경**입니다.
 자세한 비전과 단계별 로드맵은 [VISION_AND_ROADMAP.md](VISION_AND_ROADMAP.md).
 
-## 현재 상태 (Phase 0 — 베타 가능)
+## 현재 상태 (Phase 0~6 기능 완료 — 베타 가능)
 
 - ✅ 영역 박스 OCR + 한국어(또는 사용자 지정 언어) 오버레이
-- ✅ Tesseract OCR (기본) + PaddleOCRv5 (선택)
+- ✅ Tesseract OCR (기본) + PaddleOCRv5 (선택) + UIA 자동 라우팅 (활성 창 모드)
+- ✅ auto 모드 결정론 라우팅 (SL-1) — OCR은 `eng+kor` 고정, 라인 언어는 문자 스크립트로만 판정 (추측 없음)
 - ✅ 번역: opus-mt(en→ko 전용) + m2m100(다국어 폴백) 하이브리드
 - ✅ Unicode script 기반 다국어 자동 라우팅 (Hangul/Hiragana/CJK/Arabic/Cyrillic)
 - ✅ YOLO식 bbox region smoothing — 좌우 다른 언어 동시 표시 시 안정
@@ -22,19 +24,45 @@
 - ✅ 한국어 박스 자동 폰트 축소 + height 동적 확장
 - ✅ 모델 lazy load (UI 즉시 표시, 모델은 백그라운드 준비)
 - ✅ Tesseract 미설치/언어팩 누락도 시작 예외 X — 상태 라벨로 안내
+- ✅ 표시 게이트 (DG-1) — 번역 신뢰도가 낮은 줄은 그리지 않고 상태줄에 숨긴 줄 수 표시
+- ✅ 물리 픽셀 좌표 통일 (DP-1) — 고DPI/배율 환경에서 자막 위치 어긋남 제거
+- ✅ 멀티 모니터 — 가상 데스크톱 전체 오버레이 + 모니터 연결/해제/해상도 변경 시 자동 재적합
+- ✅ 트레이 상주 + 글로벌 단축키, DPAPI 암호화 영구 캐시, 민감 창 자동 일시정지, 시작 프로그램 등록
 
-## 실행
+## 설치 / 실행
 
-개발 환경에서는 [run_cocktail.bat](run_cocktail.bat)을 더블클릭하면 환경 진단 후 앱이 시작됩니다.
+### 최초 1회 준비
+
+1. **Python 3.10 / 3.11** + 의존성: `pip install -r requirements.txt`
+2. **Tesseract OCR 엔진 설치** (앱에 포함돼 있지 않음):
+   https://github.com/UB-Mannheim/tesseract/wiki
+3. **첫 실행 시 번역 모델 다운로드** — opus-mt / m2m100을 Hugging Face에서 받습니다
+   (약 1~2GB, 인터넷 필요). 받은 뒤에는 캐시에서 로드하므로 오프라인으로 동작합니다.
+
+자세한 환경/버전/환경변수는 [ENVIRONMENT.md](ENVIRONMENT.md).
+
+### 실행
+
+[run_cocktail.bat](run_cocktail.bat)을 더블클릭하면 쓸 수 있는 Python을 자동으로 찾아
+환경 진단 후 앱이 시작됩니다. (탐색 순서: `COCKTAIL_PYTHON` → conda `cd` env → `py -3.11` → `python`)
 
 ```bash
 run_cocktail.bat
 ```
 
+앱이 조용히 죽으면 `debug_run.bat`으로 타임스탬프 로그(`debug_log.txt`)를 남길 수 있습니다.
+
 진단만 실행하려면:
 
 ```bash
 python diagnose_environment.py
+```
+
+다음 개발 단계로 넘어가기 전 빠른 회귀 검사는:
+
+```bash
+python smoke_tests.py
+python pre_release_check.py
 ```
 
 ## 빌드/배포
@@ -53,8 +81,8 @@ python diagnose_environment.py
 - UI: PySide6 (LGPL — closed-source 상용 OK)
 - OCR: Tesseract (기본) / PaddleOCRv5 (선택)
 - 번역: Helsinki-NLP/opus-mt-tc-big-en-ko (Apache 2.0) + facebook/m2m100_418M (MIT)
-- 언어 감지: `unicodedata` script fast-path + langdetect 폴백
-- 자세한 내용: [TECH_STACK.md](TECH_STACK.md)
+- 언어 감지: `unicodedata` script fast-path만 (라틴/불명 = en). 다른 언어는 source 콤보에서 명시
+- 자세한 내용: [TECH_STACK.md](TECH_STACK.md), [COMMERCIAL_SOTA_REVIEW.md](COMMERCIAL_SOTA_REVIEW.md)
 
 ## 라이선스 정책
 
@@ -62,7 +90,13 @@ python diagnose_environment.py
 - PySide6 (LGPL), opus-mt (Apache 2.0), m2m100 (MIT), Tesseract (Apache 2.0), tessdata (Apache 2.0)
 - ❌ NLLB (CC-BY-NC) / PyQt5 (GPL) / 비상용 모델은 사용 안 함
 
-상세는 [BUILD.md](BUILD.md) 라이선스 체크리스트와 [VISION_AND_ROADMAP.md](VISION_AND_ROADMAP.md) 참고.
+> ⚠️ **작업 폴더에 `nllb_ct2/`(약 600MB)가 남아 있습니다.** M-5에서 폐기된 NLLB(CC-BY-NC)
+> 변환 모델 잔재로, 코드는 이 폴더를 참조하지 않고 빌드 산출물(`dist/`)·인스톨러에도
+> 포함되지 않습니다(`build.spec`은 명시한 파일만 담고, `.claudeignore`에도 등록됨).
+> 다만 **소스 배포/저장소 공개 전에는 삭제해야 합니다** — 비상용 라이선스 자산이기 때문입니다.
+
+상세는 [BUILD.md](BUILD.md) 라이선스 체크리스트, [LICENSE-3RDPARTY.md](LICENSE-3RDPARTY.md),
+[COMMERCIAL_SOTA_REVIEW.md](COMMERCIAL_SOTA_REVIEW.md), [VISION_AND_ROADMAP.md](VISION_AND_ROADMAP.md) 참고.
 
 ## 라이선스
 
@@ -72,9 +106,13 @@ python diagnose_environment.py
 
 - ⭐ [STORY.md](STORY.md) — **프로젝트 여정 전체 내러티브** (다른 세션/협업자 진입점)
 - [VISION_AND_ROADMAP.md](VISION_AND_ROADMAP.md) — 장기 비전 + Phase 0~6 로드맵 + 보안 원칙
+- [ARCHITECTURE.md](ARCHITECTURE.md) — 현재 클래스 구조 + 시그널/데이터 흐름 + 다음 분리 단계 설계
 - [ENVIRONMENT.md](ENVIRONMENT.md) — 검증된 Python/패키지 버전, 환경 진단, 빠른 시작 가이드
 - [TECH_STACK.md](TECH_STACK.md) — 사용 기술 한 페이지
+- [COMMERCIAL_SOTA_REVIEW.md](COMMERCIAL_SOTA_REVIEW.md) — SOTA/상용 라이선스 기준선
 - [UPDATE_LOG.md](UPDATE_LOG.md) — 변경 일지
+- [smoke_tests.py](smoke_tests.py) — 다음 단계 전 빠른 회귀 검사
+- [pre_release_check.py](pre_release_check.py) — 배포 전 파일/워크플로우/라이선스 정책 검사
 - [BUILD.md](BUILD.md) — 빌드/배포 절차
 - [CODE_SIGNING.md](CODE_SIGNING.md) — Windows 코드 서명 (Authenticode) 가이드
 - [ICONS.md](ICONS.md) — 아이콘 자산 가이드
@@ -85,7 +123,11 @@ python diagnose_environment.py
 ## 보안/윤리 원칙
 
 자세한 5개 원칙은 [VISION_AND_ROADMAP.md](VISION_AND_ROADMAP.md) §5 참고.
-요약: **100% 로컬 처리 · 번역 데이터 비저장 · 민감 영역 자동 OFF · 오픈 코어 · 즉시 토글**.
+요약: **로컬 추론(화면·번역 데이터 외부 전송 없음) · 번역 데이터 비저장 · 민감 영역 자동 OFF ·
+오픈 코어 · 즉시 토글**.
+
+외부 통신은 **최초 1회 모델 다운로드(Hugging Face)** 뿐입니다. 그 이후 실행에서는
+번역·OCR 모두 로컬에서만 수행되며 화면 내용은 네트워크로 나가지 않습니다.
 
 ---
 

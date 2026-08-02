@@ -11,7 +11,6 @@ REQUIRED_MODULES = [
     "torch",
     "pytesseract",
     "PIL",
-    "langdetect",
     "transformers",
     "PySide6",
 ]
@@ -59,6 +58,12 @@ def main():
         print("       Tesseract backend can still run.")
     else:
         print("[OK] Optional PaddleOCR backend installed")
+
+    # 앱과 같은 규칙으로 ./tessdata 를 먼저 본다. 안 맞추면 앱은 kor을 보는데
+    # 진단만 "eng, osd"라고 보고해서 사용자를 헷갈리게 한다.
+    local_tessdata = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tessdata")
+    if os.path.isdir(local_tessdata):
+        os.environ["TESSDATA_PREFIX"] = local_tessdata
 
     tess = find_tesseract()
     if not tess:

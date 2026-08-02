@@ -67,9 +67,8 @@ PyInstaller `--onedir` 빌드는 동적 .pyd로 함께 묶이므로 의무사항
 
 ## 6. 언어 감지
 
-| 컴포넌트 | 라이선스 |
-|---|---|
-| **langdetect** | Apache 2.0 |
+제3자 컴포넌트 없음. Python 표준 라이브러리 `unicodedata`의 스크립트 판정만 사용한다 (SL-1).
+(과거에 쓰던 `langdetect`(Apache 2.0)는 퇴역했고 의존성에서 제거됐다.)
 
 ---
 
@@ -109,3 +108,15 @@ PyInstaller의 GPL은 **빌드 도구**에만 적용되며, 산출물(.exe)은 �
 - [ ] `requirements.txt`/`requirements-dev.txt`에 신규 항목 → 본 문서에 동시 등록
 - [ ] `BUILD.md` 라이선스 체크리스트와 본 문서 동기화
 - [ ] 모델 라이선스는 Hugging Face 페이지에서 직접 확인 (라이선스가 변경될 수 있음)
+
+## 2026-05-04 공식 근거 재확인
+
+- Tesseract OCR: Apache 2.0 — https://github.com/tesseract-ocr/tesseract
+- tessdata_fast: Apache 2.0 — https://github.com/tesseract-ocr/tessdata_fast
+- PaddleOCR / PP-OCRv5: Apache 2.0 계열 — https://github.com/PaddlePaddle/PaddleOCR
+- PySide6 / Qt for Python: LGPLv3/GPLv3/commercial — https://doc.qt.io/qtforpython-6/index.html
+- transformers: Apache 2.0 — https://github.com/huggingface/transformers
+- PyTorch: BSD-style — https://github.com/pytorch/pytorch
+
+주의: 라이브러리 라이선스와 모델 라이선스는 별개다. Hugging Face 모델은 모델 카드 기준으로 별도 확인한다.
+성능상 좋아도 CC-BY-NC/비상용/불명확 모델은 상용 배포 기본 경로에서 제외한다.

@@ -20,4 +20,5 @@ paddlepaddle==2.5.2
 # 변환: ct2-transformers-converter --model facebook/nllb-200-distilled-600M --output_dir ./nllb_ct2 --quantization int8
 ctranslate2
 
-
+# 실행 방법 
+# python -X faulthandler smoke_tests.py --paddle

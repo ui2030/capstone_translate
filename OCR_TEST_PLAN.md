@@ -15,13 +15,16 @@
 
 ## 최소 샘플 문장
 
-| 입력 | 기대 감지 | 비고 |
+source = auto 기준. **SL-1 이후 라틴/불명 스크립트는 추측하지 않고 전부 `en`으로 간다.**
+다른 라틴 언어는 사용자가 source 콤보에서 명시해야 한다.
+
+| 입력 | 기대 감지 (auto) | 비고 |
 |---|---|---|
 | Thank you | en | 짧은 영어 |
-| Gracias | es | UI 콤보에는 없지만 m2m100 라우팅 가능 |
-| Hvala | hr | langdetect 오판 보정 케이스 |
-| Merci | fr | 짧은 라틴 보정 |
-| Danke | de | 짧은 라틴 보정 |
+| Gracias | en | 라틴 = en 고정. `Spanish`를 콤보에서 고르면 m2m100 라우팅 |
+| Hvala | en | 라틴 = en 고정 (과거 추측 엔진의 대표 오판 케이스) |
+| Merci | en | 라틴 = en 고정. 콤보에서 French 선택 시 fr |
+| Danke | en | 라틴 = en 고정. 콤보에서 German 선택 시 de |
 | 감사합니다 | ko | Unicode Hangul fast-path |
 | ありがとう | ja | Unicode Hiragana fast-path |
 | 謝謝 | zh | 순수 CJK는 zh 기본 |
@@ -32,10 +35,10 @@
 
 | 배치 | 입력 | 기대 |
 |---|---|---|
-| 좌측 column | `Thank you` / `Hvala` | 좌측 라틴 region으로 분리, 각 라인 힌트 유지 |
-| 우측 column | `감사합니다` / `안녕` | 우측 Korean region으로 분리 |
-| 좌측 하단 island | `Merci` / `Bonjour` | 상단 좌측과 별도 French island |
-| 우측 하단 island | `ありがとう` | Japanese island |
+| 좌측 column | `Thank you` / `Hvala` | 좌우 column이 한 라인으로 병합되지 않고 분리 (LM-1) |
+| 우측 column | `감사합니다` / `안녕` | 우측 Korean 라인으로 분리 |
+| 좌측 하단 island | `Merci` / `Bonjour` | 별도 라인 박스. auto에서는 en으로 처리 (SL-1) |
+| 우측 하단 island | `ありがとう` | Japanese 라인 |
 
 ## 합격 기준
 
