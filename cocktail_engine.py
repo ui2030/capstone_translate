@@ -31,7 +31,8 @@ from cocktail_ocr import (
     OCR_LINE_MIN_CONF, OCR_LINE_MIN_WIDTH_RATIO, OCR_LINE_SPLIT_GAP_RATIO,
     OCR_MAX_SIDE_PX,
     OCR_MIN_DOWNSCALE, OCR_UPSCALE_CHAR_BUDGET, OCR_UPSCALE_FACTOR,
-    OCR_UPSCALE_MIN_FACTOR, OCR_UPSCALE_TRIGGER_PX,
+    OCR_UPSCALE_CONF_MARGIN, OCR_UPSCALE_MIN_COVERAGE, OCR_UPSCALE_MIN_FACTOR,
+    OCR_UPSCALE_TRIGGER_INK_PX, OCR_UPSCALE_TRIGGER_PX,
     OCR_WORD_HEIGHT_OUTLIER_RATIO, OCR_WORD_MIN_CONF,
     OCR_ZH_EMPTY_COOLDOWN, OCR_ZH_MIN_CJK_CHARS, OCR_ZH_RESCAN_ENABLED,
     OCR_ZH_STICKY_FRAMES, OCR_ZH_TESS_LANG, OCR_ZH_UNREAD_INK_RATIO,
@@ -40,8 +41,8 @@ from cocktail_ocr import (
     PARA_MERGE_MIN_WIDTH_RATIO, PARA_MERGE_OVERLAP_RATIO, PARA_MERGE_STOP_CHARS,
     TESSERACT_ERROR, TESS_CONFIG,
     UIA_PROVIDER, _TESSERACT_CMD, _ocr_line_is_noise, cjk_char_count,
-    drop_pinyin_lines, environment_summary, has_hangul, join_ocr_words,
-    unread_ink_ratio,
+    drop_pinyin_lines, environment_summary, has_hangul, ink_glyph_px,
+    join_ocr_words, unread_ink_ratio,
 )
 from cocktail_platform import is_sensitive_window
 from cocktail_translate import (
@@ -70,14 +71,25 @@ def merge_paragraph_lines(lines, confs=None):
         return lines, confs
 
     order = sorted(range(len(lines)), key=lambda i: (lines[i][1][1], lines[i][1][0]))
+    pos = {idx: k for k, idx in enumerate(order)}
     groups = []
-    for idx in order:
+    for k, idx in enumerate(order):
         # 바로 앞 줄이 아니라 **열려 있는 모든 문단**과 대본다. 위→아래 정렬만 쓰면
         # 옆 단(column)이나 화면 구석의 아이콘 한 조각이 사이에 끼는 순간 문단이 끊긴다.
         for g in reversed(groups):
-            if len(g) < PARA_MERGE_MAX_LINES and _same_paragraph(lines[g[-1]], lines[idx]):
-                g.append(idx)
-                break
+            if len(g) >= PARA_MERGE_MAX_LINES or not _same_paragraph(lines[g[-1]], lines[idx]):
+                continue
+            # PM-2: 그런데 건너뛴 줄이 **합쳐질 문단의 가로 구간 안**에 있으면 읽기 순서가
+            # 뒤집힌다. 실측(2026-09-07): 1·2·4번 줄이 한 문단이 되고 3번이 따로 남아
+            # 문장이 "1 2 4 3" 순서로 나갔다 — CER 8.70→45.45 / 10.67→45.06 / 4.35→33.99.
+            # 옆 단(column)·구석 아이콘은 이 구간 밖이라 원래 의도(칼럼 건너뛰기)는 산다.
+            left = min(lines[i][1][0] for i in g + [idx])
+            right = max(lines[i][1][2] for i in g + [idx])
+            if any(min(right, lines[order[j]][1][2]) > max(left, lines[order[j]][1][0])
+                   for j in range(pos[g[-1]] + 1, k)):
+                continue
+            g.append(idx)
+            break
         else:
             groups.append([idx])
     groups.sort(key=lambda g: (lines[g[0]][1][1], lines[g[0]][1][0]))
@@ -746,32 +758,57 @@ class BackgroundController(QObject):
         confs = []
         lines = self._tess_lines(gray, lang_str, scale, confs)
 
-        # OU-1: 작은 글씨(캡션/각주)는 1차 OCR이 통째로 무너진다. 통과한 라인들의
-        # 높이 중앙값이 임계 미만일 때만 확대 재OCR.
+        # OU-1: 작은 글씨(캡션/각주)는 1차 OCR이 통째로 무너진다 → 확대 재OCR.
         # UB-1/RP-1: 배율은 **1차 패스가 읽어낸 글자 수**로 정한다(예산 안에 들어오게 낮춘다).
         #   비용 ≈ 글자 수 × 배율² 이므로 factor = √(예산 / 글자 수), 상한 2배.
         #   실측 시간을 쓰면 PC 부하에 따라 같은 입력이 다르게 읽힌다(RP-1) — 글자 수는
         #   같은 이미지에서 항상 같은 값이라 결과가 재현된다.
-        if lines:
-            median_px = float(np.median([font_size for _, _, font_size in lines]))
-            first_chars = sum(len(text) for text, _, _ in lines)
-            factor = min(OCR_UPSCALE_FACTOR,
-                         math.sqrt(OCR_UPSCALE_CHAR_BUDGET / max(first_chars, 1)))
-            up = scale * factor
-            if median_px < OCR_UPSCALE_TRIGGER_PX and factor >= OCR_UPSCALE_MIN_FACTOR:
-                confs2 = []
-                lines2 = self._tess_lines(gray, lang_str, up, confs2)
-                # UA-1: 채택 기준은 **라인 수가 아니라 평균 confidence**다.
-                # 라인 수로 고르면 "쓰레기 줄이 더 많이 생긴 쪽"이 이긴다.
-                # 실측(2026-08-05): 픽셀 폰트 UI는 확대하면 라인이 20→22로 늘지만
-                # 정확도는 0.869→0.850으로 떨어진다(구 규칙은 이걸 채택했다).
-                # 평균 conf는 71.9→60.4로 정직하게 떨어져 확대를 거부한다.
-                # 문서에서는 반대로 93.9→94.7이라 확대를 채택하고 0.869→0.938을 얻는다.
-                if _mean_conf(confs2) > _mean_conf(confs):
-                    lines, confs = lines2, confs2
+        # 싼 조건(배율 예산)을 먼저 본다 — `_wants_upscale`은 8~9 ms 짜리 이미지 측정을
+        # 할 수도 있어서, 어차피 확대 못 할 프레임에서 그 값을 치르면 안 된다.
+        first_chars = sum(len(text) for text, _, _ in lines)
+        factor = min(OCR_UPSCALE_FACTOR,
+                     math.sqrt(OCR_UPSCALE_CHAR_BUDGET / max(first_chars, 1)))
+        if factor >= OCR_UPSCALE_MIN_FACTOR and self._wants_upscale(gray, lines):
+            confs2 = []
+            lines2 = self._tess_lines(gray, lang_str, scale * factor, confs2,
+                                      blind=not lines)
+            # UA-1: 채택 기준은 **라인 수가 아니라 평균 confidence**다.
+            # 라인 수로 고르면 "쓰레기 줄이 더 많이 생긴 쪽"이 이긴다.
+            # 실측(2026-08-05): 픽셀 폰트 UI는 확대하면 라인이 20→22로 늘지만
+            # 정확도는 0.869→0.850으로 떨어진다(구 규칙은 이걸 채택했다).
+            # 평균 conf는 71.9→60.4로 정직하게 떨어져 확대를 거부한다.
+            # 문서에서는 반대로 93.9→94.7이라 확대를 채택하고 0.869→0.938을 얻는다.
+            # UA-2: conf 만 보면 **줄을 통째로 흘린 패스가 이긴다**(남은 줄만 깨끗하니
+            # 평균이 오른다). 그래서 "글자를 버리지 않았을 것"을 함께 요구한다.
+            # 1차가 0줄이면 비교할 것이 없다 — 확대 결과를 그대로 쓴다(OU-2).
+            if not lines or (_mean_conf(confs2) > _mean_conf(confs) - OCR_UPSCALE_CONF_MARGIN
+                             and sum(len(t) for t, _, _ in lines2)
+                             >= first_chars * OCR_UPSCALE_MIN_COVERAGE):
+                lines, confs = lines2, confs2
         return lines, confs
 
-    def _tess_lines(self, gray, lang_str, scale, conf_out=None):
+    @staticmethod
+    def _wants_upscale(gray, lines):
+        """OU-2: 확대 재OCR을 켤 것인가. **1차 오독에 흔들리지 않는 판정.**
+
+        예전 규칙은 `if lines:` 안에서 1차가 읽은 word 높이 중앙값 하나만 봤다. 그런데
+        1차가 무너지면 그 값도 같이 오염된다 — 실측(2026-09-07):
+          - 10px Georgia/Calibri/Times/Impact 를 **28px 로 보고** → 확대 꺼짐, CER 10.7%.
+            강제로 켜면 0.00%. 즉 확대가 가장 필요한 조합에서만 확대가 꺼졌다.
+          - 1차가 **0줄**이면 `if lines:` 에 걸려 확대를 아예 건너뛰었다. 0줄이야말로
+            확대가 필요한 상황이다(Courier New 10px 100% → 2배 재시도로 0.00%, OU-3 포함).
+        → 높이 규칙이 "확대 불필요"라고 할 때만 이미지에서 직접 글리프 높이를 재어
+          두 번째 의견을 묻는다. 빈 화면은 None 이라 확대가 켜지지 않는다(비용 방지).
+        결정론은 유지된다(RP-1): 두 신호 다 같은 이미지에서 항상 같은 값이 나온다.
+        """
+        if lines:
+            median_px = float(np.median([font_size for _, _, font_size in lines]))
+            if median_px < OCR_UPSCALE_TRIGGER_PX:
+                return True
+        glyph_px = ink_glyph_px(gray)
+        return glyph_px is not None and glyph_px < OCR_UPSCALE_TRIGGER_INK_PX
+
+    def _tess_lines(self, gray, lang_str, scale, conf_out=None, blind=False):
         """grayscale 이미지를 scale배(1보다 작으면 축소) 리샘플 → Tesseract → 원본 좌표 라인.
 
         BZ-1: 예전에는 Otsu 전역 이진화 + `MORPH_OPEN(1x1)`을 먼저 걸었다. 실측 결과
@@ -782,11 +819,23 @@ class BackgroundController(QObject):
         → grayscale을 그대로 넘긴다.
 
         conf_out: 주면 라인별 평균 confidence를 같은 순서로 채운다 (DG-1).
+        blind: 1차 패스가 **한 줄도 못 읽은** 뒤의 확대 재시도인가 (OU-3).
         """
         if abs(scale - 1.0) > 1e-6:
             h, w = gray.shape[:2]
-            # 축소는 INTER_AREA(에일리어싱 없이 글자 획을 보존), 확대는 LANCZOS4.
-            interp = cv2.INTER_LANCZOS4 if scale > 1.0 else cv2.INTER_AREA
+            # 축소는 INTER_AREA(에일리어싱 없이 글자 획을 보존).
+            # OU-3(2026-09-07): 확대 보간은 **1차 패스가 뭐라도 읽었는지**에 따라 갈린다.
+            #   Lanczos 는 음수 로브(링잉)로 획을 또렷하게 만든다 — 글자가 이미 분해되는
+            #   해상도에서는 이득이지만(Calibri Light 10px 실화면 0.40% vs Cubic 8.30%),
+            #   해상도 한계의 좁은 글꼴에서는 링잉 halo 가 글자를 붙여 버린다:
+            #   Impact 11px 은 **정확히 2.0배에서만** 0줄(CER 100%), 1.5/2.5/3.0배는 멀쩡하다.
+            #   그런 글자는 1차가 애초에 0줄이므로 그때만 링잉 없는 INTER_LINEAR 로 바꾼다.
+            #   실측(bench size_·screen_ 23종, 이 규칙 기준 CER 최악):
+            #     전부 LANCZOS4  100.00%(Impact 11px 0줄)   전부 CUBIC 8.30%   전부 LINEAR 5.53%
+            #     1차 0줄일 때만 LINEAR → **2.77%**  ← 채택
+            #   0줄 재시도 CER: Courier New 10px 4.35→0.00 · 같은 이탤릭 3.56→0.00 · Impact 11px 100→1.19
+            interp = ((cv2.INTER_LINEAR if blind else cv2.INTER_LANCZOS4)
+                      if scale > 1.0 else cv2.INTER_AREA)
             gray = cv2.resize(gray, (max(1, int(w * scale)), max(1, int(h * scale))),
                               interpolation=interp)
         data = pytesseract.image_to_data(

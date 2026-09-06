@@ -8,5 +8,5 @@
   "font_px": 10,
   "expect_display": true,
   "role": "criterion1",
-  "notes": "같은 문장을 실제 화면(ClearType)에 10px로 띄워 ImageGrab 캡처."
+  "notes": "Segoe UI 10px를 실제 화면(ClearType)에 띄워 ImageGrab 캡처. 크기축+렌더방식축: Segoe UI 10px ClearType. 옛 시료(대조군)"
 }

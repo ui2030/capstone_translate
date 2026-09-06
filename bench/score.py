@@ -277,10 +277,13 @@ def criterion1(ctrl, results):
         rows.append({"fixture": fx["name"], "font_px": fx["font_px"],
                      "cer": cer, "ref_chars": ref_len, "hyp_chars": hyp_len,
                      "ocr_lines": len(res["rows"])})
-    graded = [r for r in rows if r["font_px"] in (10, 12, 14)]
+    # 합격 조건 문구는 "10·12·14px"이지만 열거하면 11px 같은 중간 크기가 사각지대가 된다
+    # (2026-09-07 실측: size_impact_11 = CER 100%인데 판정에서 통째로 빠졌다).
+    # "작은 글씨"의 정의는 특정 세 값이 아니라 **14px 이하**다.
+    graded = [r for r in rows if r["font_px"] <= 14]
     worst = max((r["cer"] for r in graded), default=1.0)
     return {"pass": bool(graded) and worst <= 0.05,
-            "measured": f"10/12/14px CER 최대 {worst*100:.1f}%",
+            "measured": f"14px 이하 CER 최대 {worst*100:.1f}%",
             "target": "≤ 5%", "detail": rows}
 
 

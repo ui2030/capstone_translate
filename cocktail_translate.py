@@ -28,16 +28,20 @@ NO_REPEAT_NGRAM_SIZE = 4          # ↓3이면 더 강하게 억제(정상 문�
 # NZ-1(원문 문자 구성)은 OCR이 "말이 되는 오독"을 하면 뚫린다(초소형 캡션 →
 # "마우 냄비 thang에"류 그럴싸한 쓰레기). 번역까지 끝난 뒤 마지막으로 한 번 더 거른다.
 DISPLAY_GATE_ENABLED = True            # False면 게이트 전체 무효(디버그용)
-DISPLAY_TINY_LINE_PX = 12              # 원문 라인 높이(물리 px)가 이 미만이면 "극소 라인"
 # DG-1b(2026-09-05): 70 → 60. 70은 근거 없이 잡은 값이었고, 채점판에서 **정상 줄만** 잡았다.
-# 실측 (bench 시료 전체 중 line_px < 16 라인 36개, + 6~12px 합성 캡션 코퍼스):
-#     정상으로 읽힌 극소 라인   conf 64.0(다크 UI "4 spaces") · 나머지 전부 81~96
-#     오독/부분 인식 극소 라인   conf 46.8 ("ae provisional November ean", 정답유사 0.66)
-#     오독 쓰레기 6~7px 캡션    conf 49.7~73.2 — 단 라인 높이가 14px 이상이라 이 규칙 밖이다
-# → px<12 구간에서 실측된 유일한 쓰레기는 46.8이고 유일한 정상 탈락은 64.0이다.
-#   60은 그 사이에 있고 46.8을 여전히 막는다. 오탐(정상 줄 숨김)은 무음 실패라 더 비싸다.
-# ↑면 더 많이 숨긴다(쓰레기도, 정상도). ↓면 깨진 자막이 새어나온다.
-DISPLAY_TINY_LINE_MIN_CONF = 60.0      # 극소 라인은 평균 conf가 이 이상일 때만 신뢰
+# DG-1c(2026-09-07): "극소 라인 **이면서** 저 conf" 였던 조건을 **conf 단독**으로 바꿨다.
+#   라인 높이는 1차 OCR이 만든 값이라 1차가 무너지면 같이 오염된다 — 실측: 10px Calibri 를
+#   28px 로 보고해서(OU-2와 같은 뿌리) 이 규칙이 영원히 안 걸렸고, conf 52.0 짜리
+#   **틀린 자막**이 그대로 떴다. 게이트가 원문을 못 보고 번역문만 보는 정책 위반이었다.
+#   높이는 못 믿어도 conf 는 이미지에서 나온 값이라 믿을 수 있다.
+# 임계 실측(bench 시료 전체를 앱 경로로 태워 정답 유사도 0.80 으로 정상/깨짐 분류):
+#     정상 줄 78개  min 64.0(다크 UI "4 spaces") · p05 86.1 · 중앙값 95.9
+#     깨진 줄       43.7 / 52.0 / 58.4 / 62.6 / 63.9 (Calibri·Impact·Georgia·Times 10px)
+#   conf<60 → 정상 숨김 0/78, conf<65 → 1/78(=1.3%, 기준 2의 오탐 한도 1% 초과).
+#   그래서 60이 상한이다. 이 위로 올리지 마라 — 오탐(정상 줄 숨김)은 무음 실패라 더 비싸다.
+# ↓면 깨진 자막이 새어나온다. Georgia/Times 급(62~64)은 conf 로는 못 막는다 —
+# 그건 OU-2(확대 트리거)가 애초에 제대로 읽게 해서 막는다.
+DISPLAY_SRC_MIN_CONF = 60.0            # 원문 OCR 평균 conf 가 이 미만이면 그 줄은 안 그린다
 DISPLAY_MIN_TGT_SCRIPT_RATIO = 0.3     # 번역문 글자 중 목표 언어 스크립트 비율 하한 (한국어 목표인데 한글 극소 = 실패)
 DISPLAY_LEN_COLLAPSE_MIN_SRC = 20      # 원문이 이 길이 이상일 때만 길이 붕괴 검사
 DISPLAY_LEN_COLLAPSE_RATIO = 0.15      # 번역문/원문 길이 하한. 한국어는 보통 0.5배 이상이라 0.15는 보수적
@@ -592,10 +596,14 @@ def _display_gate_reason(src_text, tgt_text, tgt_lang, line_px=None, conf=None):
     그래서 번역이 끝난 뒤 "이 줄을 믿을 근거가 있는가"를 마지막으로 한 번 더 묻는다.
 
     규칙은 넷 다 **거짓 양성(정상 줄을 숨김)이 나기 어려운 쪽**으로 잡았다:
-      1. 극소 라인 + 낮은 원문 confidence — 둘 다 성립할 때만. 큰 글씨는 conf가 낮아도 통과.
+      1. 낮은 원문 confidence — 넷 중 **유일하게 원문을 보는 규칙**(DG-1c). 나머지 셋은
+         번역문만 보므로, 원문이 그럴듯하게 깨지면 번역문도 그럴듯해서 전부 통과한다.
       2. 목표 언어 스크립트 비율 — 한국어 목표인데 번역문에 한글이 거의 없다 = 번역이 실패했다.
       3. 길이 붕괴 — 긴 원문이 초단문으로 뭉개진 경우(모델이 입력을 버린 것).
       4. 미번역 잔류(CO-1) — 허용치는 번역문 길이에 비례한다(CO-2).
+
+    `line_px`는 더 이상 판정에 쓰지 않는다 — 1차 OCR이 만든 값이라 1차가 무너지면
+    같이 오염된다(DG-1c). 인자는 호출부 계약 유지를 위해 남겨 둔다.
     """
     if not DISPLAY_GATE_ENABLED:
         return None
@@ -604,10 +612,10 @@ def _display_gate_reason(src_text, tgt_text, tgt_lang, line_px=None, conf=None):
     if not tgt:
         return "empty"
 
-    # 1) 극소 라인 + 저 confidence. 확대 재OCR(OU-1)로도 못 살린 영역이 여기 걸린다.
-    if (line_px is not None and 0 < line_px < DISPLAY_TINY_LINE_PX
-            and conf is not None and 0 <= conf < DISPLAY_TINY_LINE_MIN_CONF):
-        return f"tiny-line({int(line_px)}px)/low-conf({conf:.0f})"
+    # 1) 원문 confidence 가 낮다 = 이 줄을 제대로 읽었다는 근거가 없다.
+    #    확대 재OCR(OU-1/OU-2)로도 못 살린 영역이 여기 걸린다.
+    if conf is not None and 0 <= conf < DISPLAY_SRC_MIN_CONF:
+        return f"low-src-conf({conf:.0f})"
 
     # 2) 번역문이 목표 언어 스크립트를 거의 안 담고 있으면 번역 자체가 안 일어난 것.
     wanted = _LANG_TO_SCRIPTS.get(tgt_lang)

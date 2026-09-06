@@ -117,6 +117,16 @@ OCR_LINE_MIN_WIDTH_RATIO = 1.2    # 라인 폭 ≥ 글자 크기 × 이 값. ↑
 OCR_UPSCALE_TRIGGER_PX = 18       # 라인 높이 중앙값(원본 px) 임계. ↑면 더 자주 확대(느려짐), ↓면 덜 확대
 OCR_UPSCALE_FACTOR = 2            # 확대 배율. 3 이상은 비용 대비 이득이 거의 없다
 
+# --- OU-2 튜닝 레버: 1차 오독에 안 흔들리는 확대 트리거 (실측 2026-09-07) ----
+# 위 `OCR_UPSCALE_TRIGGER_PX` 는 1차 패스가 읽은 값이라 1차가 무너지면 같이 오염된다
+# (10px 글자를 28px 로 보고 → 확대 꺼짐 → CER 10.7%, 강제로 켜면 0.00%).
+# 그래서 높이 규칙이 "확대 불필요"라고 할 때만 `ink_glyph_px()`(이미지에서 직접 잰
+# 글리프 높이)로 두 번째 의견을 묻는다. 실측 대응: 10px→4~8 · 14px→7 · 18px→9~10 · 24px→12~13.
+OCR_UPSCALE_TRIGGER_INK_PX = 11   # 글리프 높이 중앙값이 이 미만이면 확대. ↑면 큰 글씨까지 확대(느려짐)
+OCR_INK_GLYPH_MIN_PX = 3          # 이보다 낮은 성분은 점·획 조각 (글자로 세지 않음)
+OCR_INK_GLYPH_MAX_PX = 200        # 이보다 높은 성분은 테두리·도형
+OCR_INK_MIN_GLYPHS = 8            # 글자 성분이 이보다 적으면 판정하지 않는다(None)
+
 # --- PF-1: OCR 입력 크기 안전밸브 (실측 기반, 2026-08-03) --------------------
 # ⚠️ 이것은 **성능 최적화 레버가 아니다. 폭주 방지용 안전밸브다.**
 #
@@ -164,6 +174,18 @@ OCR_MIN_DOWNSCALE = 0.7           # 아무리 커도 이 배율 아래로는 절
 # ↑면 더 크게 확대(느려짐), ↓면 확대를 더 자주 포기한다.
 OCR_UPSCALE_CHAR_BUDGET = 2700
 OCR_UPSCALE_MIN_FACTOR = 1.3      # 이 배율 미만은 인식률 이득이 없어 확대를 아예 생략
+# UA-2(2026-09-07): 채택 기준에 "글자를 버리지 않았을 것"을 더한다. 평균 conf 만 보면
+# **줄을 통째로 흘린 패스가 이긴다** — 남은 줄만 깨끗하니 평균이 오른다. 실측: Impact 12px
+# 실화면에서 2차가 가운데 줄을 잃고(248자→140자, 비 0.56) conf 81.8→89.5 라 채택되어
+# CER 7.51%→45.85%. 같은 코퍼스에서 정상 조합의 글자수 비는 전부 1.00~2.07 이라 둘이 겹치지 않는다.
+# ↑면 확대를 더 자주 거부(작은 글씨 이득을 잃음), ↓면 글자를 흘린 패스가 다시 새어든다.
+OCR_UPSCALE_MIN_COVERAGE = 0.8    # 2차가 읽은 글자 수 ≥ 1차 글자 수 × 이 값일 때만 채택
+# UA-3(2026-09-07): conf 는 절대 눈금이 아니다. 확대 결과가 더 정확한데 평균 conf 가
+# 3~4점 낮아 거부된 사례가 있었다(Calibri italic 12px: 2차 CER 5.53% < 1차 11.46% 인데
+# conf 85.5→81.8 이라 탈락). 반대로 UA-1 의 근거였던 "쓰레기 줄이 늘어난 확대"는
+# conf 가 71.9→60.4 로 11.5점 떨어진다 — 둘 사이에 여유가 있다. 마진은 그 사이에 둔다.
+# ↑면 확대를 더 자주 채택(쓰레기도 함께 들어옴), ↓면 좋은 확대를 거부한다.
+OCR_UPSCALE_CONF_MARGIN = 4.0     # 2차 conf 가 1차보다 이만큼까지 낮아도 채택
 
 # --- PF-2 튜닝 레버: 변경 밴드만 OCR ----------------------------------------
 # 프레임 해시(16x16 셀)는 이미 "어느 셀이 변했는지"를 알고 있는데 버리고 있었다.
@@ -408,22 +430,58 @@ def cjk_char_count(text: str) -> int:
     return sum(1 for ch in str(text or "") if is_cjk_char(ch))
 
 
-def unread_ink_ratio(gray, boxes) -> float:
-    """ZH-2 근거 (c): 화면의 잉크 중 인식된 라인 박스가 덮지 못한 비율 (0~1).
+def ink_mask(gray):
+    """잉크 픽셀 마스크(bool). Otsu 소수 클래스라 다크 테마도 그대로 통과한다.
 
-    "글자가 있는데 안 읽혔다"를 언어와 무관하게, 결정론적으로, 값싸게 재는 신호다.
-    잉크는 Otsu 이진화의 소수 클래스로 잡는다(다크 테마도 그대로 통과한다).
-    잉크가 거의 없는 화면은 판정하지 않고 0.0 을 돌려준다 — 빈 화면에서 비율은 노이즈다.
+    잉크가 거의 없는 화면(빈 화면)에서는 None — 그 위의 비율·통계는 전부 노이즈다.
     """
     if gray is None or not getattr(gray, "size", 0):
-        return 0.0
+        return None
     _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     ink = bw == 0
     if ink.mean() > 0.5:          # 다크 테마: 배경이 검은 쪽이므로 소수 클래스를 잉크로 본다
         ink = ~ink
-    total = int(ink.sum())
-    if total < OCR_ZH_INK_MIN_PIXELS:
+    if int(ink.sum()) < OCR_ZH_INK_MIN_PIXELS:
+        return None
+    return ink
+
+
+def ink_glyph_px(gray):
+    """OU-2: 이미지의 **글리프 높이 중앙값**(px). OCR 결과를 하나도 쓰지 않는다.
+
+    OU-1 확대 트리거는 원래 "1차 패스가 읽은 word 높이 중앙값"만 봤는데, 1차가 무너지면
+    그 값이 같이 오염된다 — 실측(2026-09-07): 10px Georgia/Calibri/Times/Impact 를
+    **28px 로 보고**해서 확대가 가장 필요한 조합에서만 확대가 꺼졌다.
+    잉크 연결 성분의 높이는 오독과 무관하게 이미지에서만 나오는 값이라 2차 의견이 된다.
+    실측 대응표(글꼴 px → 반환값): 10→4~8 · 12→6~9 · 14→7 · 18→9~10 · 24→12~13.
+    글자가 거의 없으면 None(판정하지 않음). 비용 8~9 ms/1920x1080 — 그래서 호출부는
+    **높이 규칙이 이미 확대를 켠 프레임에서는 부르지 않는다.**
+    """
+    ink = ink_mask(gray)
+    if ink is None:
+        return None
+    n, _labels, stats, _cent = cv2.connectedComponentsWithStats(
+        ink.astype(np.uint8), 8)
+    if n <= 1:
+        return None
+    h = stats[1:, cv2.CC_STAT_HEIGHT]
+    # 점·테두리선·큰 도형은 글자가 아니다. 남은 것의 중앙값만 본다.
+    keep = h[(h >= OCR_INK_GLYPH_MIN_PX) & (h <= OCR_INK_GLYPH_MAX_PX)]
+    if keep.size < OCR_INK_MIN_GLYPHS:
+        return None
+    return float(np.median(keep))
+
+
+def unread_ink_ratio(gray, boxes) -> float:
+    """ZH-2 근거 (c): 화면의 잉크 중 인식된 라인 박스가 덮지 못한 비율 (0~1).
+
+    "글자가 있는데 안 읽혔다"를 언어와 무관하게, 결정론적으로, 값싸게 재는 신호다.
+    잉크가 거의 없는 화면은 판정하지 않고 0.0 을 돌려준다 — 빈 화면에서 비율은 노이즈다.
+    """
+    ink = ink_mask(gray)
+    if ink is None:
         return 0.0
+    total = int(ink.sum())
     covered = np.zeros(ink.shape, dtype=bool)
     for (left, top, right, bottom) in boxes:
         covered[max(0, int(top)):int(bottom) + 1, max(0, int(left)):int(right) + 1] = True

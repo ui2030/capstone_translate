@@ -7,6 +7,11 @@
 원칙:
   - 실제 폰트(Segoe UI / Malgun Gothic / Microsoft YaHei / Segoe Fluent Icons)와
     실제 UI 크기(10~24px)만 쓴다. "합성이지만 렌더링 조건은 실물"이 요구사항이었다.
+  - **시료를 추가할 때는 그 시료가 실사용의 어떤 축(폰트/크기/굵기/배경/렌더방식)을
+    대표하는지 먼저 적는다.** 축을 안 적으면 "쉬운 문제만 내는 시료"가 된다 —
+    2026-09-07에 실제로 그랬다(Segoe UI 한 종류만 10장 = 기준 1 만점). bench/README.md 표.
+  - 폰트가 없는 PC에서는 **조용히 다른 폰트로 대체하지 않는다**. 시료와 정답이 어긋나느니
+    실패가 낫다(`FontMissing`).
   - 문단 정답은 **렌더링 좌표 순서(top, left)** 로 저장한다. 채점기가 OCR 결과를 같은
     기준으로 정렬해 비교하므로 순서 불일치가 점수를 오염시키지 않는다.
   - 이미지에 그렸지만 정답에 넣지 않는 글자를 만들지 마라. 채점기는 "정답에 없는 텍스트"를
@@ -29,6 +34,18 @@ SEGOE_BD = str(FONTS / "segoeuib.ttf")
 MALGUN = str(FONTS / "malgun.ttf")
 YAHEI = str(FONTS / "msyh.ttc")
 ICONS = str(FONTS / "SegoeIcons.ttf")
+
+
+class FontMissing(RuntimeError):
+    """이 PC에 없는 폰트. 대체 폰트로 그리면 시료와 정답이 어긋나므로 그냥 실패한다."""
+
+
+def font_file(filename, family):
+    """폰트 파일 경로. 없으면 대체하지 않고 FontMissing."""
+    p = FONTS / filename
+    if not p.exists():
+        raise FontMissing(f"{family} ({filename}) 없음 → {FONTS}")
+    return str(p)
 
 
 def font(path, size):
@@ -108,6 +125,84 @@ def make_ladder():
         s.save(f"size_{px:02d}", lang="en", font_px=px, expect_display=True,
                role="criterion1",
                notes=f"같은 문장을 {px}px Segoe UI로 렌더. 문단 1개.")
+
+
+# --- 1c. 폰트·굵기 축 ---------------------------------------------------------
+# 왜 있는가: 위 계단(size_/screen_ 10~24)은 전부 **Segoe UI Regular · 흰 배경 · 같은 문장**
+# 이라서 기준 1이 CER 0%로 만점이 나왔다. 2026-09-07 실측 448건에서 폰트를 바꾸자
+# 10px 최악 CER 100%, CER>5% 비율 37% 였다 — **폰트가 크기보다 지배적인 변수**다.
+# 아래 표는 그 실측에서 대표값을 골라 온 것이고, 각 줄의 "축"이 존재 이유다.
+#
+#   (이름, 폰트파일, 폰트이름, px, 배경, 축 설명)
+FONT_AXIS = [
+    ("size_courier_10", "cour.ttf", "Courier New", 10, "plain",
+     "폰트축: 고정폭 세리프. 얇은 세리프가 10px에서 뭉개짐 (실측 CER 100% = 한 줄도 못 읽음)"),
+    ("size_impact_11", "impact.ttf", "Impact", 11, "plain",
+     "폰트축+굵기축: 초굵은 압축 폰트. 글자 사이가 붙어 붕괴 (실측 CER 100%)"),
+    ("size_impact_12", "impact.ttf", "Impact", 12, "plain",
+     "폰트축+굵기축: 같은 폰트를 12px로 — 한 픽셀 차이로 살아나는지 보는 대조군"),
+    ("size_georgia_10", "georgia.ttf", "Georgia", 10, "plain",
+     "폰트축: 세리프 본문 + 올드스타일 숫자. 부분 오독 (실측 CER 10.67%)"),
+    ("size_calibri_10", "calibri.ttf", "Calibri", 10, "plain",
+     "폰트축: 라운드 휴머니스트 산세리프(Office 기본). 부분 오독 (실측 CER 10.67%)"),
+    ("size_times_10", "times.ttf", "Times New Roman", 10, "plain",
+     "폰트축: 가장 흔한 문서 세리프. 부분 오독 (실측 CER 10.67%)"),
+    ("size_calibrilight_10", "calibril.ttf", "Calibri Light", 10, "plain",
+     "굵기축: Light. 실측에서 굵기 중 최악(평균 12.45%) — Bold(1.02%)보다 이쪽이 시료로 유익"),
+    ("size_comic_10_pattern", "comic.ttf", "Comic Sans MS", 10, "pattern",
+     "폰트축+배경축: 손글씨체 + 무늬 배경. 문단 병합이 읽기 순서를 뒤섞은 조합 "
+     "(실측 CER 8.7%→45.5%)"),
+    ("size_comic_10_glass", "comic.ttf", "Comic Sans MS", 10, "glass",
+     "폰트축+배경축: 손글씨체 + 반투명 패널(mica/acrylic 유리 UI). 위와 같은 뒤섞임 조합"),
+]
+
+
+def _bg_pattern(s):
+    """무늬 배경 — 사선 줄무늬. 글자 획과 배경 획이 섞여 라인 분할을 흔든다."""
+    for x in range(-s.h, s.w + s.h, 9):
+        s.d.line([(x, s.h), (x + s.h, 0)], fill=(225, 229, 236), width=3)
+
+
+def _bg_glass(s):
+    """반투명 패널 — 컬러 배경 위에 흰 패널을 78%로 섞는다(요즘 UI의 유리 재질)."""
+    for y in range(s.h):
+        t = y / max(1, s.h - 1)
+        s.d.line([(0, y), (s.w, y)],
+                 fill=(int(64 + 120 * t), int(96 + 84 * t), int(150 + 56 * t)))
+    box = (8, 8, s.w - 8, s.h - 8)
+    s.img.paste(Image.blend(s.img.crop(box),
+                            Image.new("RGB", (box[2] - box[0], box[3] - box[1]),
+                                      (255, 255, 255)), 0.78), box[:2])
+    s.d = ImageDraw.Draw(s.img)
+
+
+BACKGROUNDS = {"plain": (None, (17, 17, 17)),
+               "pattern": (_bg_pattern, (17, 17, 17)),
+               "glass": (_bg_glass, (58, 60, 68))}
+
+
+def make_font_axis():
+    """폰트·굵기·배경을 바꿔 가며 같은 문장을 PIL 렌더한다(정답은 그린 문자열 그대로)."""
+    missing = []
+    for name, fname, family, px, bg, axis in FONT_AXIS:
+        try:
+            f = font(font_file(fname, family), px)
+        except FontMissing as e:
+            missing.append(f"{name}: {e}")
+            print(f"  [건너뜀] {name} — {e}")
+            continue
+        max_w = min(1160, px * 46)
+        paint, fill = BACKGROUNDS[bg]
+        probe = Sheet(10, 10)
+        lines = probe.wrap(LADDER_TEXT, f, max_w)
+        height = 40 + len(lines) * max(px + 2, int(px * 1.38))
+        s = Sheet(max_w + 80, height)
+        if paint:
+            paint(s)
+        s.para(LADDER_TEXT, 40, 20, f, max_w, fill=fill)
+        s.save(name, lang="en", font_px=px, expect_display=True, role="criterion1",
+               notes=f"{family} {px}px / 배경 {bg}. {axis}")
+    return missing
 
 
 # --- 2. 영어 문서 (삽화 옆 좁은 단) -------------------------------------------
@@ -356,30 +451,64 @@ def make_multi():
                  "사이드바 5항목이 병합 함정.")
 
 
-# --- 1b. 글자 크기 계단 (실화면 캡처) ----------------------------------------
-def make_ladder_onscreen():
-    """같은 문장을 **실제 화면에 띄워** ImageGrab으로 캡처한다.
+# --- 1b/1d. 실화면 캡처 (ClearType) -------------------------------------------
+# 렌더방식 축. PIL 렌더는 회색조 안티에일리어싱이라 실물보다 깨끗하다 — 10px에서 오류율 0%가
+# 나오면 시료가 앱을 봐준 것이다. Windows 화면 글자는 ClearType(서브픽셀, 색 번짐)이라 작은
+# 글씨에서 훨씬 어렵다(실측: 10px 평균 PIL 10.8% vs 실화면 15.8%, Georgia 10px는 10.67%→33.99%).
+# 그 조건을 담으려면 화면을 찍는 수밖에 없다.
+SCREEN_LADDER = [(f"screen_{px:02d}", "segoeui.ttf", "Segoe UI", px,
+                  f"크기축+렌더방식축: Segoe UI {px}px ClearType. 옛 시료(대조군)")
+                 for px in (10, 12, 14, 18, 24)]
 
-    PIL 렌더는 회색조 안티에일리어싱이라 실물보다 깨끗하다 — 10px에서 오류율 0%가
-    나오면 시료가 앱을 봐준 것이다. Windows 화면 글자는 ClearType(서브픽셀, 색 번짐)이라
-    작은 글씨에서 훨씬 어렵다. 그 조건을 그대로 담으려면 화면을 찍는 수밖에 없다.
+SCREEN_AXIS = [
+    ("screen_courier_10", "cour.ttf", "Courier New", 10,
+     "폰트축+렌더방식축: 고정폭 세리프 10px. PIL보다 나쁠 것으로 예상되는 최악 조합"),
+    ("screen_georgia_10", "georgia.ttf", "Georgia", 10,
+     "폰트축+렌더방식축: 세리프 10px. 실측에서 PIL 10.67% → 실화면 33.99%로 3배 악화"),
+    ("screen_calibrilight_10", "calibril.ttf", "Calibri Light", 10,
+     "굵기축+렌더방식축: 가는 획 + 서브픽셀 색번짐. 굵기 최악(Light)과 렌더 최악의 곱"),
+    ("screen_impact_11", "impact.ttf", "Impact", 11,
+     "굵기축+렌더방식축: 초굵은 압축 폰트 11px"),
+]
+
+
+def make_onscreen(specs):
+    """지정한 폰트/크기를 **실제 화면에 띄워** ImageGrab으로 캡처한다.
+
+    Qt는 없는 폰트를 조용히 대체하므로 `QFontInfo`로 실제 매칭된 이름을 확인하고,
+    다르면 그 시료를 건너뛴다(대체 폰트로 그린 시료 = 정답과 어긋난 시료).
     """
     from PIL import ImageGrab
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFont, QFontInfo
     from PySide6.QtWidgets import QApplication, QLabel
 
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
     qapp = QApplication.instance() or QApplication([])
-    made = []
-    for px in (10, 12, 14, 18, 24):
+    missing = []
+    for name, fname, family, px, axis in specs:
+        try:
+            ttf = font_file(fname, family)
+        except FontMissing as e:
+            missing.append(f"{name}: {e}")
+            print(f"  [건너뜀] {name} — {e}")
+            continue
+        qf = QFont(family)
+        qf.setPixelSize(px)
+        actual = QFontInfo(qf).family()
+        if actual != family:
+            missing.append(f"{name}: Qt가 '{family}' 대신 '{actual}'로 대체")
+            print(f"  [건너뜀] {name} — Qt 폰트 대체 감지: '{family}' → '{actual}'")
+            continue
+
         max_w = min(1160, px * 46)
         probe = Sheet(10, 10)
-        lines = probe.wrap(LADDER_TEXT, font(SEGOE, px), max_w)
+        lines = probe.wrap(LADDER_TEXT, font(ttf, px), max_w)
         label = QLabel("\n".join(lines))
+        label.setFont(qf)
         label.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         label.setStyleSheet(
-            f"QLabel {{ background: #ffffff; color: #111111; padding: 20px;"
-            f" font-family: 'Segoe UI'; font-size: {px}px; }}")
+            "QLabel { background: #ffffff; color: #111111; padding: 20px; }")
         label.move(120, 120)
         label.show()
         label.raise_()
@@ -398,26 +527,26 @@ def make_ladder_onscreen():
                 img = shot
                 break
         if img is None:
-            raise RuntimeError(f"{px}px 실화면 캡처 실패 (창이 그려지지 않음)")
+            raise RuntimeError(f"{name} 실화면 캡처 실패 (창이 그려지지 않음)")
         label.close()
         qapp.processEvents()
-        name = f"screen_{px:02d}"
         FIX.mkdir(parents=True, exist_ok=True)
+        TRUTH.mkdir(parents=True, exist_ok=True)
         img.save(FIX / f"{name}.png")
         (TRUTH / f"{name}.json").write_text(json.dumps(
             {"name": name, "paragraphs": [LADDER_TEXT], "forbidden": [],
              "lang": "en", "font_px": px, "expect_display": True,
              "role": "criterion1",
-             "notes": f"같은 문장을 실제 화면(ClearType)에 {px}px로 띄워 ImageGrab 캡처."},
+             "notes": f"{family} {px}px를 실제 화면(ClearType)에 띄워 ImageGrab 캡처. {axis}"},
             ensure_ascii=False, indent=2), encoding="utf-8")
-        made.append(name)
         print(f"  {name}.png  {img.width}x{img.height}  실화면 캡처")
-    return made
+    return missing
 
 
 def main():
     print("시료 생성:")
     make_ladder()
+    missing = make_font_axis()
     make_doc()
     make_fullhd_doc()
     make_ui()
@@ -425,10 +554,17 @@ def main():
     make_ko()
     make_multi()
     try:
-        make_ladder_onscreen()
+        missing += make_onscreen(SCREEN_LADDER + SCREEN_AXIS)
     except Exception as e:
-        print(f"  [건너뜀] 실화면 계단 시료 생성 실패: {type(e).__name__}: {e}")
+        print(f"  [건너뜀] 실화면 시료 생성 실패: {type(e).__name__}: {e}")
+        missing.append(f"실화면 전체: {type(e).__name__}: {e}")
     print(f"완료 → {FIX}")
+    if missing:
+        # 조용히 다른 폰트로 대체하느니 실패한다 — 시료와 정답이 어긋나면 채점이 거짓말을 한다.
+        print("\n[불완전] 아래 시료를 만들지 못했다 (폰트 없음/대체됨):")
+        for m in missing:
+            print(f"  - {m}")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

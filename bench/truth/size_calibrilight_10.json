@@ -1,12 +1,12 @@
 {
-  "name": "screen_18",
+  "name": "size_calibrilight_10",
   "paragraphs": [
     "The kettle on the far shelf had been whistling for a while before anyone noticed it. Marta lifted it off the heat and poured two cups without asking. Outside the rain had finally stopped and the street lamps were coming on one by one along the wet road."
   ],
   "forbidden": [],
   "lang": "en",
-  "font_px": 18,
+  "font_px": 10,
   "expect_display": true,
   "role": "criterion1",
-  "notes": "Segoe UI 18px를 실제 화면(ClearType)에 띄워 ImageGrab 캡처. 크기축+렌더방식축: Segoe UI 18px ClearType. 옛 시료(대조군)"
+  "notes": "Calibri Light 10px / 배경 plain. 굵기축: Light. 실측에서 굵기 중 최악(평균 12.45%) — Bold(1.02%)보다 이쪽이 시료로 유익"
 }

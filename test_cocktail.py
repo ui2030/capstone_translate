@@ -172,7 +172,7 @@ def test_upscale_factor_ignores_wall_clock():
     got = []
 
     def make_fake(delay):
-        def fake(_gray, _lang, scale, conf_out=None):
+        def fake(_gray, _lang, scale, conf_out=None, **_kw):
             _time.sleep(delay)
             got[-1].append(round(scale, 4))
             if conf_out is not None:
@@ -292,13 +292,21 @@ def test_display_gate_hides_length_collapse():
     assert tr.display_gate_reject(src, "응", "ko") is not None
 
 
-def test_display_gate_hides_tiny_low_conf_lines():
-    # 극소 라인(7px) + 낮은 confidence(40) 조합만 숨긴다.
+def test_display_gate_hides_low_conf_source_lines():
+    """DG-1c: 게이트의 유일한 '원문을 보는' 규칙. 라인 높이에 기대면 안 된다.
+
+    OU-2와 같은 뿌리: 1차 OCR이 무너지면 라인 높이가 부풀어(10px 글자 → 28px 보고)
+    예전의 '극소 라인 AND 저 conf' 조건이 영원히 안 걸렸고, conf 52짜리 **틀린 자막**이
+    그대로 떴다. 높이가 아무리 커도 conf 가 낮으면 숨겨야 한다.
+    """
     assert tr.display_gate_reject("hello", "안녕", "ko", 7, 40.0) is not None
-    # 같은 conf라도 글자가 크면 통과 (거짓 양성 방지).
-    assert tr.display_gate_reject("hello", "안녕", "ko", 30, 40.0) is None
-    # 극소 라인이어도 conf가 높으면 통과.
+    # 부풀려진 높이(28px)여도 저 conf면 숨긴다 — 이게 회귀 가드의 핵심이다.
+    assert tr.display_gate_reject("hello", "안녕", "ko", 28, 52.0) is not None
+    # conf 가 높으면 라인 높이와 무관하게 통과 (거짓 양성 방지).
     assert tr.display_gate_reject("hello", "안녕", "ko", 7, 95.0) is None
+    assert tr.display_gate_reject("hello", "안녕", "ko", 30, 95.0) is None
+    # conf 를 모르면(UIA 경로 등) 이 규칙은 판정하지 않는다.
+    assert tr.display_gate_reject("hello", "안녕", "ko", None, None) is None
 
 
 # --- 캐시 키 정규화 (RT-1) ---------------------------------------------------
@@ -725,7 +733,7 @@ def test_upscale_accepted_only_when_confidence_improves():
     controller.options = cap.RuntimeOptions("auto", "English", ocr.OCR_BACKEND_TESSERACT)
     passes = []
 
-    def fake_tess_lines(_gray, _lang, scale, conf_out=None):
+    def fake_tess_lines(_gray, _lang, scale, conf_out=None, **_kw):
         passes.append(scale)
         if len(passes) == 1:                    # 1차: 작은 글씨 → OU-1 확대 발동
             lines, confs = [("real sentence here", (0, 0, 120, 10), 10)], [71.9]
@@ -744,6 +752,38 @@ def test_upscale_accepted_only_when_confidence_improves():
         f"라인 수만 보고 나쁜 확대 결과를 채택했다: {out}"
 
 
+def test_upscale_rejected_when_it_drops_text():
+    """UA-2: conf 만 보면 **줄을 통째로 흘린 패스가 이긴다**(남은 줄만 깨끗하니 평균이 오른다).
+
+    실측(2026-09-07): Impact 12px 실화면에서 2차가 가운데 줄을 잃고(248자→140자)
+    conf 는 81.8→89.5 라 채택되어 CER 7.51%→45.85%.
+    """
+    controller = _make_controller()
+    controller.options = cap.RuntimeOptions("auto", "English", ocr.OCR_BACKEND_TESSERACT)
+    passes = []
+
+    def fake_tess_lines(_gray, _lang, scale, conf_out=None, **_kw):
+        passes.append(scale)
+        if len(passes) == 1:
+            lines = [("first line of the paragraph here", (0, 0, 200, 10), 10),
+                     ("second line that must not vanish", (0, 12, 200, 22), 10),
+                     ("third line of the paragraph here", (0, 24, 200, 34), 10)]
+            confs = [81.8] * 3
+        else:                       # 2차: 가운데 줄을 통째로 흘렸는데 conf 는 더 높다
+            lines = [("first line of the paragraph here", (0, 0, 200, 10), 10),
+                     ("third line of the paragraph here", (0, 24, 200, 34), 10)]
+            confs = [89.5] * 2
+        if conf_out is not None:
+            conf_out.extend(confs)
+        return lines
+
+    controller._tess_lines = fake_tess_lines
+    out = controller.perform_ocr_with_boxes(np.zeros((100, 200, 3), dtype=np.uint8))
+    assert len(passes) == 2, f"확대 재OCR이 발동하지 않았다: {passes}"
+    assert "second line that must not vanish" in " ".join(t for t, _b, _f in out), \
+        f"글자를 버린 확대 결과를 conf 만 보고 채택했다: {out}"
+
+
 def test_upscale_fires_on_fullscreen_sized_input():
     """UB-1: 전체화면(1920x1080)에서도 확대 재OCR이 발동해야 한다.
 
@@ -754,7 +794,7 @@ def test_upscale_fires_on_fullscreen_sized_input():
     controller = _make_controller()
     scales = []
 
-    def fake_tess_lines(_gray, _lang, scale, conf_out=None):
+    def fake_tess_lines(_gray, _lang, scale, conf_out=None, **_kw):
         scales.append(scale)
         if conf_out is not None:
             conf_out.append(80.0 if len(scales) == 1 else 90.0)
@@ -764,6 +804,96 @@ def test_upscale_fires_on_fullscreen_sized_input():
     controller.perform_ocr_with_boxes(np.zeros((1080, 1920, 3), dtype=np.uint8))
     assert len(scales) == 2, f"전체화면에서 확대 재OCR이 생략됐다: {scales}"
     assert scales[1] >= ocr.OCR_UPSCALE_MIN_FACTOR, f"확대 배율이 너무 낮다: {scales}"
+
+
+def _text_image(px, height_px=140):
+    """진짜 글자가 그려진 회색조 이미지. `ink_glyph_px` 는 이미지만 보므로 렌더가 필요하다."""
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (900, height_px), (255, 255, 255))
+    d = ImageDraw.Draw(img)
+    for row in range(4):
+        d.text((20, 10 + row * (px + 6)),
+               "the kettle on the far shelf had been whistling for a while",
+               fill=(0, 0, 0), font_size=px)
+    return np.array(img)
+
+
+def test_upscale_fires_even_when_first_pass_inflates_line_height():
+    """OU-2: 1차 오독은 라인 높이를 부풀린다 — 그 값으로 확대를 끄면 안 된다.
+
+    실측(2026-09-07): 10px Georgia/Calibri/Times/Impact 를 1차가 **28px 로 보고**해서
+    `median_px < 18` 이 성립하지 않았고, 확대가 가장 필요한 조합에서만 확대가 꺼졌다
+    (CER 10.67%; 강제로 켜면 0.00%). 트리거는 1차 결과와 무관한 신호도 봐야 한다.
+    """
+    controller = _make_controller()
+    controller.options = cap.RuntimeOptions("auto", "English", ocr.OCR_BACKEND_TESSERACT)
+    scales = []
+
+    def fake_tess_lines(_gray, _lang, scale, conf_out=None, **_kw):
+        scales.append(scale)
+        if conf_out is not None:
+            conf_out.append(62.0 if len(scales) == 1 else 94.0)
+        # 1차가 세 줄을 한 덩어리로 잘못 묶어 높이를 28px 로 보고한 상황.
+        return [("garbled blob of three rows", (20, 10, 800, 38), 28)]
+
+    controller._tess_lines = fake_tess_lines
+    controller.perform_ocr_with_boxes(_text_image(10))
+    assert len(scales) == 2, f"부풀려진 높이(28px) 때문에 확대가 꺼졌다: {scales}"
+
+
+def test_upscale_retries_when_first_pass_reads_nothing():
+    """OU-2: 1차가 0줄이면 확대를 **더** 해야 한다. 예전엔 `if lines:` 로 건너뛰었다.
+
+    실측: Courier New 10px 100% → 2배 재OCR 하면 4.35%.
+    단 빈 화면(잉크 없음)에서는 헛돈을 쓰면 안 된다 — 그건 켜지지 않아야 한다.
+    """
+    controller = _make_controller()
+    controller.options = cap.RuntimeOptions("auto", "English", ocr.OCR_BACKEND_TESSERACT)
+    scales = []
+
+    def fake_tess_lines(_gray, _lang, scale, conf_out=None, **_kw):
+        scales.append(scale)
+        if len(scales) == 1:
+            return []                              # 1차: 한 줄도 못 읽음
+        if conf_out is not None:
+            conf_out.append(91.0)
+        return [("the kettle on the far shelf", (20, 10, 800, 22), 9)]
+
+    controller._tess_lines = fake_tess_lines
+    out = controller.perform_ocr_with_boxes(_text_image(10))
+    assert len(scales) >= 2 and scales[1] > scales[0], f"0줄인데 확대를 건너뛰었다: {scales}"
+    assert out, "확대가 읽어낸 줄이 버려졌다(1차 0줄과 비교하면 안 된다)"
+
+    # 잉크가 없는 빈 화면은 확대하지 않는다 (비용 방지).
+    scales.clear()
+    controller.perform_ocr_with_boxes(np.full((1080, 1920, 3), 250, dtype=np.uint8))
+    assert len(scales) == 1, f"빈 화면에서 확대 재OCR이 돌았다: {scales}"
+
+
+def test_paragraph_merge_preserves_reading_order():
+    """PM-2: 문단 병합이 읽기 순서를 뒤섞으면 안 된다.
+
+    실측(2026-09-07): 같은 행이 좌/우로 쪼개진 화면에서 1·2·4번 줄이 한 문단이 되고
+    3번이 따로 남아 "1 2 4 3" 순서로 나갔다 — CER 8.70→45.45 / 4.35→33.99.
+    합쳐질 문단의 가로 구간 안에 다른 줄이 끼어 있으면 그 줄을 건너뛰어 합치지 않는다.
+    """
+    lines = [("first row of the paragraph", (40, 20, 578, 31), 8),
+             ("second row left half", (40, 38, 322, 48), 8),
+             ("second row right half", (363, 38, 585, 48), 8),
+             ("third row of the paragraph", (40, 55, 189, 65), 8)]
+    merged, _ = eng.merge_paragraph_lines(lines, [90.0] * 4)
+    joined = " ".join(t for t, _b, _f in merged)
+    for a, b in zip(lines, lines[1:]):
+        assert joined.index(a[0]) < joined.index(b[0]), \
+            f"읽기 순서가 뒤집혔다: {joined}"
+
+    # 진짜 2단(column) 문서는 여전히 건너뛰어 합쳐야 한다 (원래 의도 유지).
+    two_col = [("left column line one", (40, 20, 300, 32), 10),
+               ("right column line one", (600, 20, 860, 32), 10),
+               ("left column line two", (40, 34, 300, 46), 10),
+               ("right column line two", (600, 34, 860, 46), 10)]
+    merged2, _ = eng.merge_paragraph_lines(two_col, [90.0] * 4)
+    assert len(merged2) == 2, f"2단 문서의 칼럼 병합이 깨졌다: {merged2}"
 
 
 def test_ocr_langs_keeps_kor_when_target_is_not_korean():
@@ -795,7 +925,7 @@ def test_low_conf_latin_screen_rescans_with_kor():
     os.environ.pop("COCKTAIL_OCR_LANGS_AUTO", None)
     langs_used = []
 
-    def fake_tess_lines(_gray, lang, _scale, conf_out=None):
+    def fake_tess_lines(_gray, lang, _scale, conf_out=None, **_kw):
         langs_used.append(lang)
         if "kor" in lang:                       # 제대로 읽음
             lines, confs = [("인벤토리", (0, 0, 60, 20), 20)], [95.0]

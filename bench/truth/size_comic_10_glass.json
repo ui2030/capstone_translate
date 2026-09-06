@@ -1,12 +1,12 @@
 {
-  "name": "screen_18",
+  "name": "size_comic_10_glass",
   "paragraphs": [
     "The kettle on the far shelf had been whistling for a while before anyone noticed it. Marta lifted it off the heat and poured two cups without asking. Outside the rain had finally stopped and the street lamps were coming on one by one along the wet road."
   ],
   "forbidden": [],
   "lang": "en",
-  "font_px": 18,
+  "font_px": 10,
   "expect_display": true,
   "role": "criterion1",
-  "notes": "Segoe UI 18px를 실제 화면(ClearType)에 띄워 ImageGrab 캡처. 크기축+렌더방식축: Segoe UI 18px ClearType. 옛 시료(대조군)"
+  "notes": "Comic Sans MS 10px / 배경 glass. 폰트축+배경축: 손글씨체 + 반투명 패널(mica/acrylic 유리 UI). 위와 같은 뒤섞임 조합"
 }
