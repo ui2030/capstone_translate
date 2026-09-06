@@ -30,16 +30,36 @@ from cocktail_platform import (
     get_window_rect, is_autorun_enabled, set_autorun, set_mouse_through,
     set_window_capture_affinity, set_window_rect, set_window_topmost,
 )
+from cocktail_translate import PERSIST_CACHE_DEFAULT_ON, PERSIST_CACHE_TTL_DAYS
 
 
-# 글로벌 단축키 — keyboard 패키지 (MIT, optional). 미설치 시 로컬 단축키만 동작.
-try:
-    import keyboard as _keyboard  # type: ignore
-    _KEYBOARD_OK = True
-except Exception as _e:
-    _keyboard = None
-    _KEYBOARD_OK = False
-    print(f"[INFO] 글로벌 단축키 라이브러리 keyboard 미설치 — 로컬 단축키만 사용. ({_e})")
+# --- PV-3 튜닝 레버: 전역 단축키(키 후킹)는 opt-in --------------------------
+# `keyboard` 패키지(MIT, optional)는 저수준 키보드 후킹으로 **모든 키 입력을 가로챈다** —
+# 키로거와 같은 API다. "전부 로컬"을 내세우는 앱에서 기본 활성은 모순이고, 백신 오탐의
+# 단골이라 합격기준 6("백신 경고 없이 실행되는가")과도 직결된다.
+# 끈 상태에서도 기능은 하나도 줄지 않는다: 트레이 메뉴(열기 / 번역 시작·정지 / 캡처 모드 /
+# 영역 편집 / 마우스 통과 / 자동 실행 / 기록 / 종료) + 창 단축키(Ctrl+Shift+H, Ctrl+Shift+P)로
+# 전부 닿는다. 잃는 것은 "창이 안 보일 때 키만으로 토글"뿐이다.
+# ↑True 로 되돌리면 예전 동작. 사용자는 트레이 메뉴에서 언제든 켤 수 있다.
+GLOBAL_HOTKEYS_DEFAULT = False
+
+# 후킹 라이브러리는 **켤 때만** import 한다. import 자체가 후킹을 걸지는 않지만,
+# 안 쓰는 후킹 라이브러리를 프로세스에 올려 둘 이유도 없다(시작도 그만큼 가벼워진다).
+_keyboard = None
+
+
+def _load_keyboard():
+    """전역 단축키를 켤 때만 호출. 실패하면 None (앱은 정상 동작)."""
+    global _keyboard
+    if _keyboard is None:
+        try:
+            import keyboard as _kb  # type: ignore
+            _keyboard = _kb
+        except Exception as e:
+            print(f"[INFO] 글로벌 단축키 라이브러리 keyboard 미설치 — "
+                  f"트레이·창 단축키만 사용. ({e})")
+            _keyboard = False
+    return _keyboard or None
 
 
 # --- FT-1 (A4): 오버레이 폰트 스택 ------------------------------------------
@@ -149,6 +169,12 @@ class SettingsWindow(QMainWindow):
         # T-1: 트레이 종료 vs hide 분기
         self._is_quitting = False
 
+        # PV-1/PV-3: 프라이버시 스위치 두 개. 둘 다 저장된 설정(PS-1)에서 복원하고
+        # 기본은 "남기지 않음 / 후킹하지 않음"이다. 실제 적용은 트레이·컨트롤러 준비 뒤.
+        self._hotkeys_on = False
+        self._persist_cache_on = self._settings.value(
+            "ui/persist_cache", PERSIST_CACHE_DEFAULT_ON, type=bool)
+
         # W-1 (Phase 1B): 마우스 통과 토글
         # W-6: 실제 시작 상태와 일치시킨다. OverlayWindow는 생성/모드전환 시
         # update_for_mode()로 항상 통과 ON — 초기값 False면 첫 토글이 무효였다.
@@ -219,7 +245,13 @@ class SettingsWindow(QMainWindow):
 
         # T-1: 시스템 트레이 + 글로벌 단축키
         self._setup_tray()
-        self._register_global_hotkeys()
+        # PV-3: 전역 단축키는 저장된 설정에 따라. 기본 OFF라 첫 실행에서는 후킹이 없다.
+        if self._settings.value("ui/global_hotkeys", GLOBAL_HOTKEYS_DEFAULT, type=bool):
+            self._register_global_hotkeys()
+        else:
+            self._sync_hotkey_ui()
+        # PV-1: 영구 캐시 on/off 적용. 꺼져 있으면 지난 기록도 여기서 사라진다.
+        self.controller.set_persist_cache(self._persist_cache_on)
 
         # P-9: 모델 lazy load — UI는 이미 떠 있고, 모델은 백그라운드로 준비
         self.run_button.setEnabled(False)
@@ -440,7 +472,8 @@ class SettingsWindow(QMainWindow):
         self.setWindowIcon(icon)
 
         self.tray = QSystemTrayIcon(icon, self)
-        self.tray.setToolTip("Cocktail Translator (Ctrl+Shift+Q 토글, Ctrl+Shift+A 열기)")
+        # 툴팁의 단축키 안내는 실제 등록 상태를 따라간다(PV-3) — 안 되는 키를 광고하지 않는다.
+        self.tray.setToolTip("Cocktail Translator")
 
         menu = QMenu()
         a_show = QAction("열기", self)
@@ -476,6 +509,34 @@ class SettingsWindow(QMainWindow):
         self._autorun_action.setChecked(is_autorun_enabled())
         self._autorun_action.triggered.connect(self._toggle_autorun)
         menu.addAction(self._autorun_action)
+
+        # PV-3: 전역 단축키 = 키 후킹. 기본 꺼짐, 여기서 켠다.
+        self._hotkeys_action = QAction("전역 단축키 (Ctrl+Shift+Q/A)", self)
+        self._hotkeys_action.setCheckable(True)
+        self._hotkeys_action.setChecked(self._hotkeys_on)
+        self._hotkeys_action.setToolTip(
+            "켜면 창이 안 보여도 키로 토글할 수 있지만, 모든 키 입력을 가로채는 후킹을 겁니다"
+            " (백신이 경고할 수 있음). 꺼도 이 트레이 메뉴로 전부 조작됩니다."
+        )
+        self._hotkeys_action.triggered.connect(self._toggle_global_hotkeys)
+        menu.addAction(self._hotkeys_action)
+
+        # PV-1: 번역 기록(영구 캐시) — 남길지 여부 + 즉시 삭제.
+        self._persist_action = QAction("번역 기록을 디스크에 저장", self)
+        self._persist_action.setCheckable(True)
+        self._persist_action.setChecked(self._persist_cache_on)
+        self._persist_action.setToolTip(
+            f"켜면 번역 결과가 이 PC에 암호화돼 저장돼 다음 실행이 빨라집니다"
+            f" ({int(PERSIST_CACHE_TTL_DAYS)}일 뒤 자동 삭제). "
+            f"끄면 메모리에만 두고 디스크 기록을 지웁니다."
+        )
+        self._persist_action.triggered.connect(self._toggle_persist_cache)
+        menu.addAction(self._persist_action)
+
+        a_clear = QAction("번역 기록 삭제", self)
+        a_clear.setToolTip("지금까지의 번역 기록을 메모리와 디스크에서 즉시 지웁니다.")
+        a_clear.triggered.connect(self._clear_translation_history)
+        menu.addAction(a_clear)
 
         # CC-1: opus-mt 모델이 CC-BY-4.0(출처 표시 의무)이라 앱에서 표기에 닿을 수 있어야 한다.
         a_license = QAction("라이선스 정보", self)
@@ -552,18 +613,89 @@ class SettingsWindow(QMainWindow):
             return
         self._set_status(f"{self.controller.env_status} | 자동 실행: {'ON' if checked else 'OFF'}")
 
-    # --- T-1: 글로벌 단축키 ---------------------------------------------------
+    # --- T-1: 글로벌 단축키 (PV-3: 기본 OFF, 트레이에서 토글) -----------------
     def _register_global_hotkeys(self):
-        if not _KEYBOARD_OK:
+        kb = _load_keyboard()
+        if kb is None:
             print("[INFO] keyboard 미설치 — 글로벌 단축키 비활성. (pip install keyboard)")
-            return
+            self._hotkeys_on = False
+            self._sync_hotkey_ui()
+            return False
         try:
             # keyboard 콜백은 별도 스레드. 메인 스레드 진입은 시그널로.
-            _keyboard.add_hotkey('ctrl+shift+q', lambda: self.global_toggle_signal.emit())
-            _keyboard.add_hotkey('ctrl+shift+a', lambda: self.global_show_signal.emit())
+            kb.add_hotkey('ctrl+shift+q', lambda: self.global_toggle_signal.emit())
+            kb.add_hotkey('ctrl+shift+a', lambda: self.global_show_signal.emit())
             print("[INFO] 글로벌 단축키 등록: Ctrl+Shift+Q (번역 토글), Ctrl+Shift+A (창 열기)")
+            self._hotkeys_on = True
         except Exception as e:
             print(f"[WARN] 글로벌 단축키 등록 실패 (관리자 권한 필요할 수 있음): {e}")
+            self._hotkeys_on = False
+        self._sync_hotkey_ui()
+        return self._hotkeys_on
+
+    def _unregister_global_hotkeys(self):
+        """후킹을 실제로 걷어낸다. 라이브러리를 안 물었으면 걷을 것도 없다."""
+        if _keyboard:
+            try:
+                _keyboard.unhook_all_hotkeys()
+            except Exception as e:
+                print(f"[WARN] 글로벌 단축키 해제 실패: {e}")
+        self._hotkeys_on = False
+        self._sync_hotkey_ui()
+
+    def _sync_hotkey_ui(self):
+        """PV-3: 후킹 상태의 단일 출처 — 체크박스와 트레이 툴팁을 실제 상태에 맞춘다."""
+        act = getattr(self, "_hotkeys_action", None)
+        if act is not None:
+            act.blockSignals(True)
+            act.setChecked(self._hotkeys_on)
+            act.blockSignals(False)
+        if getattr(self, "tray", None) is not None:
+            self.tray.setToolTip(
+                "Cocktail Translator (Ctrl+Shift+Q 토글, Ctrl+Shift+A 열기)"
+                if self._hotkeys_on else "Cocktail Translator — 트레이 메뉴로 제어")
+
+    @Slot(bool)
+    def _toggle_global_hotkeys(self, checked: bool):
+        if checked:
+            self._register_global_hotkeys()
+        else:
+            self._unregister_global_hotkeys()
+        self._settings.setValue("ui/global_hotkeys", self._hotkeys_on)
+        self._settings.sync()
+        if checked and not self._hotkeys_on:
+            # 켜려 했는데 못 켠 경우(라이브러리 없음/권한). 체크는 이미 풀렸다 — 이유를 말한다.
+            msg = "켜지 못했습니다 (keyboard 미설치 또는 권한). 트레이 메뉴로 조작하세요"
+        else:
+            msg = ("ON — Ctrl+Shift+Q 토글 / Ctrl+Shift+A 열기" if self._hotkeys_on
+                   else "OFF — 트레이 메뉴와 창 단축키로 모두 조작할 수 있습니다")
+        self._set_status(f"{self.controller.env_status} | 전역 단축키: {msg}")
+
+    # --- PV-1: 번역 기록 ------------------------------------------------------
+    @Slot(bool)
+    def _toggle_persist_cache(self, checked: bool):
+        self._persist_cache_on = bool(checked)
+        self.controller.set_persist_cache(self._persist_cache_on)
+        self._settings.setValue("ui/persist_cache", self._persist_cache_on)
+        self._settings.sync()
+        self._set_status(
+            f"{self.controller.env_status} | 번역 기록 저장: "
+            + (f"ON — 이 PC에 남습니다({int(PERSIST_CACHE_TTL_DAYS)}일 뒤 자동 삭제)"
+               if self._persist_cache_on else "OFF — 디스크 기록을 지웠습니다"))
+
+    @Slot()
+    def _clear_translation_history(self):
+        """트레이 '번역 기록 삭제'. 즉시 지우고 **결과를 숫자로** 보여준다."""
+        mem, disk, gone = self.controller.clear_translation_history()
+        msg = (f"번역 기록 삭제: 메모리 {mem}건 · 디스크 {disk}건"
+               + (" · 파일 삭제 확인" if gone else " · ⚠ 파일이 남아 있습니다"))
+        # 확인 피드백이 본론이다 — 긴 환경 문구를 앞에 붙이면 상태줄에서 잘려 안 보인다.
+        self._set_status(msg)
+        try:
+            self.tray.showMessage("Cocktail Translator", msg,
+                                  QSystemTrayIcon.Information, 3000)
+        except Exception:
+            pass
 
     @Slot()
     def _on_global_toggle(self):
@@ -741,14 +873,20 @@ class SettingsWindow(QMainWindow):
             "QLabel { color: #ffd9a0; background: rgba(60, 40, 20, 220); "
             "padding: 3px 6px; border-radius: 4px; }"
         )
+        # 기본 창 폭(880px)에서 잘리지 않고 다 읽히는 길이로 맞춰 두었다 — 자세한 것은 툴팁.
         self._hint_full = (
-            "처음이신가요? 번역할 창을 띄운 뒤 [번역 시작]을 누르면 자막이 뜹니다."
+            "처음이신가요? 번역할 창을 띄운 뒤 [번역 시작]을 누르세요. "
+            "전역 단축키·기록 저장은 기본 꺼짐(트레이에서 켜기)."
         )
         self._elide(self.hint_label, self._hint_full)
         self.hint_label.setToolTip(
             "① 번역할 창을 화면에 띄운다  ② 캡처 모드를 고른다(기본: 활성 창)\n"
             "③ [번역 시작]을 누른다 → 그 창의 글자 위에 번역 자막이 겹쳐 뜬다\n"
-            "이 창을 닫아도 트레이에서 계속 동작한다 (Ctrl+Shift+A 로 다시 열기)."
+            "이 창을 닫아도 트레이에서 계속 동작한다 (트레이 아이콘 더블클릭으로 다시 열기).\n"
+            "\n"
+            "프라이버시 기본값 — 둘 다 트레이 메뉴에서 켤 수 있습니다:\n"
+            "· 전역 단축키(Ctrl+Shift+Q/A) OFF — 켜면 모든 키 입력을 가로채는 후킹을 겁니다\n"
+            "· 번역 기록을 디스크에 저장 OFF — 켜면 번역 결과가 이 PC에 남습니다"
         )
         self.hint_label.setVisible(self._first_run_settings)
 
@@ -863,7 +1001,7 @@ class SettingsWindow(QMainWindow):
             return
 
         # 진짜 종료. BG-4: 워커 stop + 캐시 save를 controller가 수행.
-        if _KEYBOARD_OK:
+        if _keyboard:
             try:
                 _keyboard.unhook_all_hotkeys()
             except Exception:

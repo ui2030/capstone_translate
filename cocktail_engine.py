@@ -46,7 +46,8 @@ from cocktail_ocr import (
 )
 from cocktail_platform import is_sensitive_window
 from cocktail_translate import (
-    LANG_MAP, LAST_GROUP_ERRORS, PERSIST_CACHE, TRANSLATOR,
+    CACHE_LOCK, LANG_MAP, LAST_GROUP_ERRORS, PERSIST_CACHE, TRANSLATOR,
+    TRANS_CACHE,
     assign_region_languages, batch_translate, display_gate_reject,
 )
 
@@ -232,6 +233,25 @@ class BackgroundController(QObject):
             PERSIST_CACHE.save()
         except Exception:
             pass
+
+    # --- PV-1: 번역 기록(영구 캐시) — UI가 부르는 두 진입점 -------------------
+    def set_persist_cache(self, on: bool):
+        """설정 토글. 끄면 디스크 기록이 같이 지워진다(PersistentCache.set_enabled)."""
+        PERSIST_CACHE.set_enabled(on)
+        if on:
+            PERSIST_CACHE.preload_async()
+
+    def clear_translation_history(self):
+        """'번역 기록 삭제' — 메모리 캐시 + 디스크 기록을 즉시 지운다.
+
+        `(메모리 건수, 디스크 건수, 파일이 실제로 사라졌는가)`. 마지막 항목은 추측이
+        아니라 삭제 뒤에 다시 확인한 값이다 — 사용자에게 그대로 보여준다.
+        """
+        with CACHE_LOCK:
+            mem = len(TRANS_CACHE)
+            TRANS_CACHE.clear()
+        disk = PERSIST_CACHE.clear()
+        return mem, disk, not os.path.exists(PERSIST_CACHE.path)
 
     def set_running(self, value: bool):
         self.model_loaded = value

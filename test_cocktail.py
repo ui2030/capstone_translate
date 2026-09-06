@@ -421,6 +421,91 @@ def test_cache_key_absorbs_ocr_whitespace_jitter():
     assert tr._cache_key_text("hello   world") == tr._cache_key_text(" hello world\n")
 
 
+def _fresh_persist_cache(**kw):
+    """PV-1 테스트용 영구 캐시. 사용자 파일(`~/.cocktail/...`)은 절대 건드리지 않는다."""
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), "cocktail_test_cache.bin")
+    for f in (path, path + ".tmp"):
+        if os.path.exists(f):
+            os.remove(f)
+    return tr.PersistentCache(path, **kw), path
+
+
+def test_persist_cache_is_off_by_default_and_writes_nothing():
+    """PV-1: 끈 상태에서는 디스크에 아무것도 안 남는다 — 이 앱의 프라이버시 약속 자체다."""
+    assert tr.PERSIST_CACHE_DEFAULT_ON is False, "영구 캐시 기본값이 켜졌다"
+    cache, path = _fresh_persist_cache()
+    assert cache._enabled is False
+    cache.put("en", "ko", "my bank balance", "내 잔고")
+    cache.save()
+    assert not os.path.exists(path), "꺼져 있는데 디스크에 파일이 생겼다"
+    assert cache.get("en", "ko", "my bank balance") is None
+
+
+def test_persist_cache_clear_removes_the_file():
+    """PV-1: '번역 기록 삭제'는 **파일을 지운다**(빈 파일로 덮는 게 아니다)."""
+    cache, path = _fresh_persist_cache()
+    cache.set_enabled(True)
+    cache.put("en", "ko", "hello", "안녕")
+    cache.save()
+    assert os.path.exists(path), "켠 상태인데 저장이 안 됐다 (이 테스트가 무의미해진다)"
+    assert cache.clear() == 1
+    assert not os.path.exists(path)
+    assert cache.get("en", "ko", "hello") is None
+    # 끄는 것도 같은 결과여야 한다 — 끈 상태로 예전 기록이 남으면 '끔'이 아니다.
+    cache.set_enabled(True)
+    cache.put("en", "ko", "hello", "안녕")
+    cache.save()
+    cache.set_enabled(False)
+    assert not os.path.exists(path)
+
+
+def test_persist_cache_expires_stale_entries():
+    """PV-1: 오래된 항목은 스스로 사라진다."""
+    cache, _ = _fresh_persist_cache(ttl_days=1.0 / 86400.0)   # 1초
+    cache.set_enabled(True)
+    cache.put("en", "ko", "hello", "안녕")
+    assert cache.get("en", "ko", "hello") == "안녕"
+    cache._mem[tr.PersistentCache._key("en", "ko", "hello")][1] -= 10   # 10초 전에 쓴 것으로
+    assert cache.get("en", "ko", "hello") is None
+    cache.clear()
+
+
+def test_persist_cache_evicts_least_recently_used():
+    """PV-1: 축출이 LRU다. 예전엔 dict 앞쪽 절반을 통째로 버려 자주 쓰는 항목이 날아갔다."""
+    cache, _ = _fresh_persist_cache(max_entries=3)
+    cache.set_enabled(True)
+    for text in ("a", "b", "c"):
+        cache.put("en", "ko", text, text.upper())
+    assert cache.get("en", "ko", "a") == "A"    # a를 최신으로 끌어올린다
+    cache.put("en", "ko", "d", "D")             # 가장 오래 안 쓴 b가 나가야 한다
+    assert cache.get("en", "ko", "b") is None
+    assert cache.get("en", "ko", "a") == "A"
+    assert cache.get("en", "ko", "d") == "D"
+    cache.clear()
+
+
+def test_logs_do_not_leak_source_text():
+    """PV-2: 진단 로그에 화면 원문이 남지 않는다. 사유는 남는다(CO-2 무음 실패 금지)."""
+    secret = "Transfer 4,200,000 KRW to account 110-431-998877"
+    ident = tr.log_text(secret)
+    assert secret[:20] not in ident and "Transfer" not in ident
+    assert str(len(secret)) in ident            # 길이는 남는다(진단용)
+    assert ident == tr.log_text(secret), "같은 줄은 같은 식별자여야 반복 로그 억제가 산다"
+    assert ident != tr.log_text(secret + "!")
+
+    import io
+    from contextlib import redirect_stdout
+    tr._GATE_LOG_SEEN.clear()
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        reason = tr.display_gate_reject(secret, "Transfer 4,200,000 KRW", "ko", None, None)
+    logged = buf.getvalue()
+    assert reason, "이 줄은 게이트에 걸려야 한다 (안 걸리면 로그 검사가 무의미)"
+    assert "Transfer" not in logged and "110-431" not in logged, f"원문 누출: {logged!r}"
+    assert reason.split("(")[0] in logged, "사유까지 사라지면 무음 실패(CO-2)로 되돌아간 것"
+
+
 def test_lru_evicts_oldest():
     lru = tr.LRU(capacity=2)
     lru.put("a", 1)
@@ -1336,6 +1421,73 @@ def test_window_opens_without_importing_torch():
     line = next((l for l in p.stdout.splitlines() if l.startswith("HEAVY")), None)
     assert line is not None, f"프로브 실패:\n{p.stdout[-800:]}\n{p.stderr[-800:]}"
     assert line == "HEAVY []", f"창이 뜨기 전에 무거운 모듈이 import됐다: {line}"
+
+
+_PRIVACY_PROBE = '''
+import json, os, sys, tempfile
+from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QShortcut
+import cocktail_engine, cocktail_translate, cocktail_ui
+
+
+class _Stub:                      # 사용자 QSettings(레지스트리)를 읽지도 쓰지도 않는다
+    def value(self, key, default=None, type=None):
+        return default
+    def setValue(self, *a):
+        pass
+    def sync(self):
+        pass
+
+
+cocktail_ui.QSettings = lambda *a, **k: _Stub()
+# 이 창은 생성만으로 영구 캐시 설정을 적용한다(꺼짐 = 파일 삭제) — 사용자 파일 보호.
+cocktail_translate.PERSIST_CACHE.path = os.path.join(
+    tempfile.gettempdir(), "cocktail_probe_cache.bin")
+cocktail_engine.BackgroundController.start = lambda self: None
+
+app = QApplication.instance() or QApplication([])
+w = cocktail_ui.SettingsWindow()
+out = {
+    "keyboard_imported": "keyboard" in sys.modules,
+    "hotkeys_on": bool(w._hotkeys_on),
+    "persist_on": bool(w._persist_cache_on),
+    "persist_enabled": bool(cocktail_translate.PERSIST_CACHE._enabled),
+    "tray_actions": [a.text() for a in w.tray.contextMenu().actions()],
+    "shortcuts": sorted(s.key().toString() for s in w.findChildren(QShortcut)),
+}
+w._is_quitting = True
+w.close()
+print("PROBE" + json.dumps(out, ensure_ascii=False))
+'''
+
+
+def test_privacy_defaults_are_off_and_the_app_still_works():
+    """PV-1/PV-3 회귀 가드 — 기본값이 도로 켜지면 여기서 걸린다.
+
+    별도 프로세스인 이유: 다른 테스트가 이미 `keyboard` 를 물어 놨으면 같은 프로세스에서는
+    "후킹 라이브러리를 안 올린다"를 증명할 수 없다.
+    끈 상태에서도 앱이 온전한지도 같이 본다 — 트레이 메뉴 전 항목 + 창 단축키 2개
+    (기준 5 채점이 세는 것이 바로 이 `QShortcut` 2개다. 전역 단축키와 별개다).
+    """
+    import json
+    import subprocess
+
+    p = subprocess.run([sys.executable, "-c", _PRIVACY_PROBE],
+                       cwd=os.path.dirname(os.path.abspath(__file__)),
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
+    line = next((l for l in p.stdout.splitlines() if l.startswith("PROBE")), None)
+    assert line is not None, f"프로브 실패:\n{p.stdout[-800:]}\n{p.stderr[-800:]}"
+    out = json.loads(line[len("PROBE"):])
+
+    assert out["keyboard_imported"] is False, "전역 후킹 라이브러리를 기본으로 물었다"
+    assert out["hotkeys_on"] is False, "전역 단축키가 기본으로 켜졌다"
+    assert out["persist_on"] is False and out["persist_enabled"] is False, "영구 캐시가 기본으로 켜졌다"
+    # 끈 상태에서도 조작 경로가 전부 살아 있는가
+    assert len(out["shortcuts"]) >= 2, f"창 단축키가 사라졌다: {out['shortcuts']}"
+    labels = "\\n".join(out["tray_actions"])
+    for need in ("열기", "번역 시작/정지", "번역 기록 삭제", "전역 단축키", "종료"):
+        assert need in labels, f"트레이 메뉴에 '{need}'가 없다: {out['tray_actions']}"
 
 
 FULL_ONLY = {

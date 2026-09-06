@@ -126,6 +126,13 @@ def app():
     return _APP
 
 
+def _bench_cache_path():
+    """벤치용 영구 캐시 경로(임시 폴더). 사용자의 `~/.cocktail/translation_cache.bin`을
+    읽지도, 쓰지도, **지우지도** 않게 한다 — PV-1 이후 앱은 캐시를 끌 때 파일을 삭제한다."""
+    import tempfile
+    return os.path.join(tempfile.gettempdir(), "cocktail_bench_cache.bin")
+
+
 class _StubRegion:
     """`perform_ocr_with_boxes` 는 region 을 읽지 않는다. 생성자 계약만 채우는 스텁."""
     capture_mode = None
@@ -143,7 +150,9 @@ def make_ctrl(src="auto", tgt=TGT_COMBO, backend="Tesseract"):
     ctrl = a["eng"].BackgroundController(
         region=_StubRegion(), options=opts, is_self_hwnd=lambda _h: False)
     # 벤치가 사용자의 DPAPI 영구 캐시를 읽거나 더럽히지 않게 한다(속도 측정도 오염된다).
+    # PV-1 이후 앱은 "꺼짐 = 디스크 기록도 삭제"라서, 경로 자체를 임시 파일로 돌려 둔다.
     a["tr"].PERSIST_CACHE._enabled = False
+    a["tr"].PERSIST_CACHE.path = _bench_cache_path()
     return ctrl
 
 
@@ -597,6 +606,7 @@ def _latency_probe(changes):
     import cocktail_ui as uimod
 
     trmod.PERSIST_CACHE._enabled = False   # 사용자 캐시를 읽지도 더럽히지도 않는다
+    trmod.PERSIST_CACHE.path = _bench_cache_path()   # PV-1: 삭제 경로도 임시 파일로
 
     ev = {"stimuli": [], "hits": {}, "phase": []}
 
@@ -840,9 +850,14 @@ def _ui_probe(font_dpi=None):
     from PySide6.QtCore import QRect
     from PySide6.QtWidgets import QApplication, QWidget
 
+    import cocktail_translate
     import cocktail_ui
     # 모델 로드/워커 스레드/화면 캡처 금지 — UI 지오메트리만 본다.
     cocktail_ui.BackgroundController.start = lambda self: None
+    # PV-1: 이 창은 생성만으로 영구 캐시 설정을 적용한다(꺼짐이면 파일 삭제).
+    # 사용자 캐시를 건드리지 않게 경로를 임시 파일로 돌린다.
+    cocktail_translate.PERSIST_CACHE._enabled = False
+    cocktail_translate.PERSIST_CACHE.path = _bench_cache_path()
 
     qapp = QApplication.instance() or QApplication([sys.argv[0]])
     out = {"font_dpi": font_dpi, "sizes": [], "shots": []}

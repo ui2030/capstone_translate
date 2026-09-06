@@ -11,10 +11,30 @@ import os
 import re
 import sys
 import threading
+import time
 import unicodedata
 from collections import OrderedDict
 
 from cocktail_platform import dpapi_protect, dpapi_unprotect
+
+
+# --- PV-2 튜닝 레버: 로그에 원문을 남기지 않는다 ------------------------------
+# 진단 로그(DG-1 숨김 / RP-2 재번역)가 **원문 머리 60자를 그대로** 찍고 있었다.
+# 은행·로그인 화면이 지나갈 수 있는 앱에서 화면 글자가 콘솔이나 리다이렉트된 로그
+# 파일(`debug_log.txt`)에 남으면 안 된다.
+# 무음 실패로 돌아가지는 않는다(CO-2 교훈) — **무엇이 왜 걸렸는가**(사유·길이)는 그대로
+# 남기고, "어떤 줄인가"만 해시로 바꾼다. 같은 줄은 같은 해시라 반복 억제도 그대로 된다.
+# 원문이 필요한 개발자는 `COCKTAIL_LOG_TEXT=1` 로 켠다(그 환경에서만 평문이 찍힌다).
+LOG_PLAINTEXT = os.environ.get("COCKTAIL_LOG_TEXT", "").strip() == "1"
+
+
+def log_text(text) -> str:
+    """로그에 넣어도 되는 텍스트 식별자. 진단 모드에서만 원문을 돌려준다."""
+    s = _cache_key_text(text or "")
+    if LOG_PLAINTEXT:
+        return s[:60]
+    import hashlib
+    return f"{len(s)}자 #{hashlib.sha1(s.encode('utf-8')).hexdigest()[:8]}"
 
 
 # --- RP-1 튜닝 레버: 신경망 번역 반복 붕괴 방지 ------------------------------
@@ -585,8 +605,9 @@ def display_gate_reject(src_text, tgt_text, tgt_lang, line_px=None, conf=None):
     """DG-1 표시 게이트의 **단일 진입점**. 사유를 돌려주면 호출부는 그 줄을 안 그린다.
 
     CO-2: 숨김은 무음 실패다 — 사용자에게는 "그 문단만 자막이 없다"로만 보이고 로그엔
-    아무것도 안 남아 원인 추적이 불가능했다. 여기서 사유 + 원문 머리를 한 번 찍는다.
+    아무것도 안 남아 원인 추적이 불가능했다. 여기서 사유 + 줄 식별자를 한 번 찍는다.
     (라인당 1회. 정적 화면이 초당 몇 번씩 같은 줄을 재판정해도 로그는 늘지 않는다.)
+    PV-2: 식별자는 길이+해시다 — 원문은 `COCKTAIL_LOG_TEXT=1` 일 때만 찍힌다.
     """
     reason = _display_gate_reason(src_text, tgt_text, tgt_lang, line_px, conf)
     if reason:
@@ -594,19 +615,19 @@ def display_gate_reject(src_text, tgt_text, tgt_lang, line_px=None, conf=None):
     return reason
 
 
-_GATE_LOG_SEEN = OrderedDict()   # (사유 종류, 원문 머리) — 같은 줄 반복 로그 억제
+_GATE_LOG_SEEN = OrderedDict()   # (사유 종류, 줄 식별자) — 같은 줄 반복 로그 억제
 _GATE_LOG_CAP = 64
 
 
 def _log_gate_reject(reason, src_text):
-    head = _cache_key_text(src_text or "")[:60]
-    key = (reason.split("(")[0], head)
+    ident = log_text(src_text)
+    key = (reason.split("(")[0], ident)
     if key in _GATE_LOG_SEEN:
         return
     _GATE_LOG_SEEN[key] = None
     while len(_GATE_LOG_SEEN) > _GATE_LOG_CAP:
         _GATE_LOG_SEEN.popitem(last=False)
-    print(f'[INFO] DG-1 숨김: {reason} "{head}"')
+    print(f"[INFO] DG-1 숨김: {reason} [{ident}]")
 
 
 def _display_gate_reason(src_text, tgt_text, tgt_lang, line_px=None, conf=None):
@@ -788,7 +809,7 @@ def _retry_collapsed(pieces, outs, src, tgt):
         return
     for i, alt in zip(bad, again):
         if repetition_excess(pieces[i], alt) < repetition_excess(pieces[i], outs[i]):
-            print(f'[INFO] RP-2 반복 붕괴 재번역: "{_cache_key_text(pieces[i])[:60]}"')
+            print(f"[INFO] RP-2 반복 붕괴 재번역: [{log_text(pieces[i])}]")
             outs[i] = alt
 
 
@@ -892,20 +913,96 @@ def batch_translate(texts, src_lang_hint, tgt_lang):
     return results
 
 
-class PersistentCache:
-    """DPAPI 암호화된 영구 캐시. 키는 hash, 값은 번역 결과.
-    플랫폼 비-Windows 또는 DPAPI 실패 시 자동으로 무동작 (앱은 정상)."""
+# --- PV-1 튜닝 레버: 영구 캐시 = "화면에서 본 모든 문장"의 디스크 기록 --------
+# 이 앱의 정체성은 "전부 로컬"이다. 그런데 영구 캐시는 지나간 모든 화면의 번역을
+# 사용자 폴더(`~/.cocktail/translation_cache.bin`)에 무기한 쌓았고, 지우는 UI도
+# 만료도 끄는 옵션도 없었다(실측 2026-09-07: 개발 PC에 2,574항목 / 265KB).
+# DPAPI CurrentUser 는 **같은 윈도우 계정의 아무 프로세스나** 복호화할 수 있으므로
+# "암호화돼 있다"가 "안전하다"를 뜻하지 않는다.
+#
+# 기본값 = **끔**. 근거:
+#   ① 같은 세션의 반복은 메모리 LRU(`TRANS_CACHE`, 1024)가 이미 전부 잡는다.
+#      영구 캐시가 추가로 버는 것은 "**지난 실행**에서 본 문장을 다시 볼 때"뿐이다.
+#   ② 그 이득은 줄당 번역 1회(실측 en→ko 줄당 20~30ms)이고, 기준 4(화면변화→자막)는
+#      애초에 영구 캐시를 끈 상태로 잰다 — 즉 채점되는 속도에 영향이 0이다.
+#   ③ 은행·로그인 화면이 지나갈 수 있는 앱에서 영구 기록은 opt-in 이어야 한다.
+#      민감 창 가드(SB-1)는 창 제목 기반이라 완벽하지 않다.
+PERSIST_CACHE_DEFAULT_ON = False
 
-    def __init__(self, path: str, max_entries: int = 4096):
+# 만료. 상한(`max_entries`)은 **개수**만 묶고 나이는 안 묶는다 — 조밀한 실화면 한 장이
+# 12~22줄(실측, bench 시료)이라 자막을 한 시간 보면 ~600항목이 쌓여 상한이 며칠이면
+# 돌지만, 가끔 쓰는 사용자는 하루 수십 항목이라 **가장 오래된 기록이 반 년을 산다**.
+# 상한이 지켜 주지 못하는 쪽이 오히려 위험하므로 나이로 한 번 더 자른다.
+# 7일 = 영구 캐시가 실제로 버는 재사용 창(어제 보던 문서·게임을 오늘 다시 연다)이고,
+# 그 너머는 다시 번역해도 줄당 수십 ms다. 시각은 **마지막으로 쓴 때**를 기준으로 한다.
+# ↓면 더 안전하지만 히트율이 떨어지고, ↑면 기록이 오래 남는다.
+PERSIST_CACHE_TTL_DAYS = 7
+
+
+class PersistentCache:
+    """DPAPI 암호화된 영구 캐시. 키는 hash, 값은 `[번역문, 마지막 사용 시각]`.
+
+    플랫폼 비-Windows 또는 DPAPI 실패 시 자동으로 무동작 (앱은 정상).
+    PV-1: 기본은 **꺼짐**이고, 켜도 TTL 만료 + LRU 축출로 무한히 쌓이지 않는다.
+    """
+
+    def __init__(self, path: str, max_entries: int = 4096,
+                 ttl_days: float = PERSIST_CACHE_TTL_DAYS):
         self.path = path
         self.max_entries = max_entries
-        self._mem = {}
+        self.ttl_s = ttl_days * 86400.0
+        # OrderedDict: 앞이 "가장 오래 안 쓴 것". 축출은 여기 앞에서만 일어난다(LRU).
+        self._mem = OrderedDict()
         self._dirty = False
-        self._enabled = sys.platform == "win32"
+        self._enabled = sys.platform == "win32" and PERSIST_CACHE_DEFAULT_ON
         self._loaded = False
         self._load_lock = threading.Lock()
         self._mem_lock = threading.RLock()
         # P-9 정신: 디스크 I/O는 import 시점에 X. 첫 get/put 또는 명시적 preload 시.
+
+    def set_enabled(self, on: bool):
+        """설정 토글의 단일 진입점.
+
+        **끄면 디스크 기록도 같이 지운다** — 끈 상태로 예전 기록이 남아 있으면
+        그건 "끔"이 지켜지지 않은 것이다. 앱 시작 시에도 이 경로를 탄다.
+        """
+        self._enabled = bool(on) and sys.platform == "win32"
+        if not self._enabled:
+            self.clear()
+
+    def clear(self) -> int:
+        """메모리 + 디스크 기록을 지우고 지운 항목 수를 돌려준다.
+
+        파일은 **삭제**한다(빈 파일로 덮는 게 아니다). 덮어쓰기는 예전 블롭이
+        그대로 남을 수 있는 데다, "기록 없음"과 "빈 기록"을 구분할 이유가 없다.
+        """
+        with self._mem_lock:
+            n = len(self._mem)
+            self._mem = OrderedDict()
+            self._dirty = False
+            self._loaded = True   # 지운 뒤 디스크에서 도로 읽어 되살리지 않는다
+        for p in (self.path, self.path + ".tmp"):
+            try:
+                os.remove(p)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                print(f"[WARN] PersistentCache 파일 삭제 실패: {e}")
+        return n
+
+    def _prune(self, now=None):
+        """TTL 만료 + 상한 적용. 호출부가 `_mem_lock` 을 잡고 있어야 한다.
+
+        put 마다 돌리지 않는다 — 만료 검사는 O(n)이고, 만료된 항목은 `get` 이
+        어차피 개별로 거른다. 로드 시와 저장 시(30초 주기)에만 쓸어 낸다.
+        """
+        now = time.time() if now is None else now
+        for k in [k for k, v in self._mem.items() if now - v[1] > self.ttl_s]:
+            del self._mem[k]
+            self._dirty = True
+        while len(self._mem) > self.max_entries:
+            self._mem.popitem(last=False)
+            self._dirty = True
 
     def preload_async(self):
         """Phase 4: 백그라운드 스레드로 디스크 캐시 로드. UI 시작 안 막음."""
@@ -936,13 +1033,22 @@ class PersistentCache:
                     return
                 import json
                 loaded = json.loads(decrypted.decode("utf-8"))
+                # PV-1: 예전 형식({key: 번역문})은 **나이를 모른다** → 되살리지 않는다.
+                # 한 번 느려지는 대신 만료를 못 거는 기록을 남기지 않는 쪽을 택했다.
                 with self._mem_lock:
-                    self._mem = loaded
-                print(f"[INFO] PersistentCache 로드: {len(loaded)} 항목")
+                    self._mem = OrderedDict(
+                        (k, [v[0], float(v[1])]) for k, v in loaded.items()
+                        if isinstance(v, list) and len(v) == 2)
+                    kept = len(self._mem)
+                    self._prune()
+                    if len(self._mem) != kept:
+                        self._dirty = True
+                    print(f"[INFO] PersistentCache 로드: {len(self._mem)}/{len(loaded)} 항목"
+                          f" (만료·구형식 제외)")
             except Exception as e:
                 print(f"[WARN] PersistentCache 로드 실패: {e}")
                 with self._mem_lock:
-                    self._mem = {}
+                    self._mem = OrderedDict()
 
     def save(self):
         try:
@@ -950,6 +1056,7 @@ class PersistentCache:
             with self._mem_lock:
                 if not self._enabled or not self._dirty:
                     return
+                self._prune()          # 켜 둔 채 오래 돌아도 나이 든 기록은 안 남는다
                 snapshot = dict(self._mem)
             data = json.dumps(snapshot, ensure_ascii=False).encode("utf-8")
             blob = dpapi_protect(data)
@@ -972,8 +1079,21 @@ class PersistentCache:
             return None
         if not self._loaded:
             self._load()  # 동기 로드 (이미 preload_async가 마쳐있을 가능성 큼)
+        key = self._key(src, tgt, text)
+        now = time.time()
         with self._mem_lock:
-            return self._mem.get(self._key(src, tgt, text))
+            entry = self._mem.get(key)
+            if entry is None:
+                return None
+            if now - entry[1] > self.ttl_s:
+                del self._mem[key]      # 만료 — 다음 save 때 디스크에서도 사라진다
+                self._dirty = True
+                return None
+            entry[1] = now              # TTL은 "마지막으로 쓴 뒤"부터 센다
+            self._mem.move_to_end(key)  # LRU: 쓴 것은 뒤로
+            # 여기서 _dirty 를 세우지 않는다 — 히트마다 265KB를 다시 암호화·기록하게 된다.
+            # 시각 갱신은 다음 put 이 만드는 저장에 묻어 간다.
+            return entry[0]
 
     def put(self, src: str, tgt: str, text: str, translation: str):
         if not self._enabled:
@@ -981,16 +1101,19 @@ class PersistentCache:
         if not self._loaded:
             self._load()
         with self._mem_lock:
-            if len(self._mem) >= self.max_entries:
-                # 단순 절반 비우기 (LRU는 메모리 LRU에 위임)
-                keys = list(self._mem.keys())
-                for k in keys[: len(keys) // 2]:
-                    self._mem.pop(k, None)
-            self._mem[self._key(src, tgt, text)] = translation
+            key = self._key(src, tgt, text)
+            if key in self._mem:
+                self._mem.move_to_end(key)
+            self._mem[key] = [translation, time.time()]
+            # LRU 축출: 예전엔 dict 앞쪽 절반을 통째로 버려서 **자주 쓰는 항목이
+            # 임의로** 날아갔다. 이제 가장 오래 안 쓴 것부터 하나씩 밀어낸다.
+            while len(self._mem) > self.max_entries:
+                self._mem.popitem(last=False)
             self._dirty = True
 
 
-# 사용자 폴더에 캐시 — 평문 출처 미저장
+# 사용자 폴더에 캐시. 키(원문)는 해시라 복원되지 않지만 **값(번역문)은 평문**이고
+# DPAPI CurrentUser 는 같은 계정이면 누구나 푼다 — 그래서 기본이 꺼짐이다(PV-1).
 _PERSIST_CACHE_PATH = os.path.join(
     os.path.expanduser("~"), ".cocktail", "translation_cache.bin"
 )

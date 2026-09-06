@@ -25,10 +25,10 @@ The Korean README is at [README.md](README.md).
 - ✅ Translation: opus-mt (en→ko fast-path) + m2m100 (multilingual fallback)
 - ✅ Unicode-script multilingual auto-routing
 - ✅ Self-capture feedback prevention (`SetWindowDisplayAffinity`)
-- ✅ System tray + global hotkeys (Ctrl+Shift+Q/A/H/P)
+- ✅ System tray + hotkeys — in-window Ctrl+Shift+H/P always on; global Ctrl+Shift+Q/A opt-in (PV-3)
 - ✅ OverlayWindow (full-screen, mouse-through, multi-monitor)
 - ✅ UIA adapter for active window text (Phase 2/3)
-- ✅ DPAPI-encrypted persistent cache (Phase 4)
+- ✅ DPAPI-encrypted persistent cache (Phase 4) — **off by default** (PV-1), 7-day expiry, LRU eviction, one-click delete
 - ✅ Sensitive-area auto-pause (Phase 5)
 - ✅ Auto-launch on Windows startup (Phase 6)
 - ✅ Deterministic auto routing (SL-1) — OCR fixed to `eng+kor`, line language decided by character script only (no guessing)
@@ -78,8 +78,8 @@ GitHub Actions release workflow at [.github/workflows/release.yml](.github/workf
 - OCR: Tesseract (Apache 2.0) / PaddleOCRv5 (optional, Apache 2.0)
 - Translation: Helsinki-NLP/opus-mt-tc-big-en-ko (CC-BY-4.0, attribution required) + facebook/m2m100_418M (MIT)
 - Language detection: `unicodedata` script fast-path only (Latin/unknown = en). Pick the source combo for other languages
-- Persistent cache: Windows DPAPI (per-user encrypted)
-- Tray + global hotkeys: PySide6 `QSystemTrayIcon` + `keyboard` (MIT, optional)
+- Persistent cache: Windows DPAPI (per-user encrypted), **disabled by default**
+- Tray + hotkeys: PySide6 `QSystemTrayIcon` + `QShortcut`; `keyboard` (MIT, optional, opt-in) for global hotkeys
 
 See [TECH_STACK.md](TECH_STACK.md).
 
@@ -99,10 +99,19 @@ See [TECH_STACK.md](TECH_STACK.md).
 See [VISION_AND_ROADMAP.md §5](VISION_AND_ROADMAP.md):
 1. Local inference — no screen content or translation is sent to any server
    (the only network access is the one-time model download from Hugging Face)
-2. No plain-text translation persistence — DPAPI-encrypted, hashed keys
-3. Sensitive-area auto-pause — password / payment / banking windows
+2. Nothing written to disk by default (PV-1) — the persistent translation cache is
+   **off by default**. Keys are hashed, but **values (translations) are plain text**
+   inside the DPAPI blob, and DPAPI `CurrentUser` can be decrypted by *any process
+   running as the same Windows user*. Turn it on from the tray if you want it: entries
+   then expire after 7 days, evict LRU, and "번역 기록 삭제 (Clear translation history)"
+   deletes the file itself.
+3. Sensitive-area auto-pause — password / payment / banking windows.
+   ⚠ Title-keyword based, so it is **incomplete** (78% missed in a 32-case measurement,
+   errors.md SB-2). Stop translation manually on sensitive screens.
 4. Open core — core logic is open source
-5. Instant toggle — global hotkey to disable anytime
+5. Instant toggle — tray menu + in-window hotkeys (Ctrl+Shift+H / P). The **global**
+   hotkeys (Ctrl+Shift+Q / A) use a low-level keyboard hook, so they are **off by
+   default** (PV-3) and the library is only imported when you enable them.
 
 ---
 
