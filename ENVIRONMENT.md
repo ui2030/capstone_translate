@@ -23,7 +23,7 @@
 ```
 
 > **시스템 Python 주의**: PATH에 잡히는 시스템 Python(3.13)에는 이 앱의 패키지가 **없습니다**.
-> 그냥 `python Cocktail완성본.py`로 실행하면 실패합니다. `run_cocktail.bat`이 올바른
+> 그냥 `python cocktail.py`로 실행하면 실패합니다. `run_cocktail.bat`이 올바른
 > 인터프리터를 찾아주므로 그것을 쓰세요 (§6).
 
 > **3.12+ 주의**: PaddleOCR/PaddlePaddle, 일부 transformer 의존성이 3.12+에서 패키징 이슈 가능.
@@ -148,9 +148,9 @@ debug_run.bat        # 더블클릭
 
 ### 회귀 검사 (코드 수정 후)
 ```bash
-python smoke_tests.py
+python test_cocktail.py
 python pre_release_check.py --allow-build-artifacts
-python "Cocktail완성본.py" --self-test
+python cocktail.py --self-test
 ```
 
 ---
@@ -189,12 +189,12 @@ run_cocktail.bat
 
 설치되는 모든 패키지가 상용 호환인지 [BUILD.md](BUILD.md) 라이선스 체크리스트 참고.
 요약:
-- ✅ PySide6 (LGPL), opus-mt (Apache 2.0), m2m100 (MIT), Tesseract (Apache 2.0), tessdata (Apache 2.0)
+- ✅ PySide6 (LGPL), opus-mt (CC-BY-4.0 · 출처 표시 필요), m2m100 (MIT), Tesseract (Apache 2.0), tessdata (Apache 2.0)
 - ✅ keyboard (MIT), uiautomation (Apache 2.0)
 - ✅ PaddleOCR/PaddlePaddle (Apache 2.0 계열)
 - ❌ NLLB (CC-BY-NC), PyQt5 (GPL) — 절대 추가 금지
-- ⚠️ 프로젝트 폴더의 `nllb_ct2/` (약 600MB)는 폐기된 NLLB(CC-BY-NC) 잔재입니다.
-  코드는 참조하지 않고 `.claudeignore`·`build.spec`에서 제외되지만 **배포 전 삭제해야 합니다.**
+- ✅ `nllb_ct2/` (약 600MB, 폐기된 NLLB CC-BY-NC 잔재)는 **2026-08-03 삭제 완료**.
+  `.gitignore`·`.claudeignore`·`build.spec` 모두에서 차단되어 있으니 다시 만들지 마세요.
 
 ---
 

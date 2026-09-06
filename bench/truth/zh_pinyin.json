@@ -1,0 +1,20 @@
+{
+  "name": "zh_pinyin",
+  "paragraphs": [
+    "第三课 · 日常用语",
+    "你好，欢迎使用这个应用",
+    "今天天气很好，我们去公园吧",
+    "这本书是我朋友送给我的礼物",
+    "学习中文需要每天练习。你可以先记住常用的词语，然后再练习写句子。"
+  ],
+  "forbidden": [
+    "nǐ hǎo, huān yíng shǐ yòng zhè ge yìng yòng",
+    "jīn tiān tiān qì hěn hǎo, wǒ men qù gōng yuán ba",
+    "zhè běn shū shì wǒ péng you sòng gěi wǒ de lǐ wù"
+  ],
+  "lang": "zh",
+  "font_px": 30,
+  "expect_display": true,
+  "role": "criterion2,3",
+  "notes": "한자 위 로마자 병음. 병음 줄은 forbidden — 자막으로 뜨면 오역 사고(PY-1)."
+}

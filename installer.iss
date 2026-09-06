@@ -3,12 +3,16 @@
 ; 빌드 절차:
 ;   1. pip install -r requirements-dev.txt
 ;   2. python download_tessdata.py    (tessdata/*.traineddata 다운로드)
-;   3. pyinstaller build.spec          (dist/Cocktail/ 생성)
-;   4. Inno Setup Compiler로 이 파일 컴파일 → Cocktail-Setup.exe
+;   3. python cocktail.py --make-icon  (assets/icon.ico 생성 — 코드로 그린다)
+;   4. pyinstaller build.spec          (dist/Cocktail/ 생성)
+;   5. Inno Setup Compiler(ISCC.exe)로 이 파일 컴파일 → Output\Cocktail-Setup-1.0.0.exe
 ;
 ; traineddata는 컴포넌트로 선택 설치 (eng 필수, 나머지 선택).
 ; 사용자가 선택한 traineddata만 {app}\tessdata\ 에 설치되며,
-; 본 앱은 시작 시 TESSDATA_PREFIX를 자동으로 그쪽으로 설정함 (Cocktail완성본.py).
+; 본 앱은 시작 시 TESSDATA_PREFIX를 자동으로 그쪽으로 설정함 (cocktail_ocr.py).
+;
+; PK-1: Tesseract 엔진(tesseract.exe + DLL, Apache 2.0)은 build.spec 이 dist 에 동봉하므로
+; 사용자가 따로 설치할 것이 **없다**. 라이선스 원문은 {app}\_internal\tesseract\doc\LICENSE.
 
 #define AppName        "Cocktail Overlay Translator"
 #define AppVersion     "1.0.0"
@@ -29,6 +33,9 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#AppExeName}
+; IC-2: 아이콘 원본은 코드다 (cocktail_ui.make_app_icon → `python cocktail.py --make-icon`).
+SetupIconFile=assets\icon.ico
+OutputDir=Output
 DisableProgramGroupPage=auto
 PrivilegesRequired=admin
 
@@ -53,8 +60,10 @@ Name: "tess\rus";      Description: "러시아어 (Russian)";                   
 Name: "tess\ara";      Description: "아랍어 (Arabic)";                                      Types: full
 
 [Files]
-; 본체 — PyInstaller 결과물
-Source: "dist\Cocktail\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Components: main
+; 본체 — PyInstaller 결과물 (Tesseract 엔진 포함).
+; _internal\tessdata 는 뺀다 — traineddata 는 아래 컴포넌트로 사용자가 고른 것만 {app}\tessdata 에 깔린다
+; (앱은 {app}\tessdata 를 먼저 본다: cocktail_ocr._SEARCH_DIRS).
+Source: "dist\Cocktail\*"; DestDir: "{app}"; Excludes: "_internal\tessdata\*"; Flags: recursesubdirs ignoreversion; Components: main
 
 ; traineddata — 사용자가 선택한 언어만 설치.
 ; skipifsourcedoesntexist: download_tessdata.py가 일부 파일을 못 받아도 빌드 실패 안 함.
@@ -81,9 +90,4 @@ Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,Cocktail Transl
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\tessdata"
 
-[Code]
-function InitializeSetup(): Boolean;
-begin
-  // Tesseract 엔진 자체는 사용자가 별도 설치 필요. 안내만 표시 (필수 아님 — 우리 앱 코드가 _resolve_tesseract로 자동 탐색).
-  Result := True;
-end;
+; PK-1: Tesseract 엔진은 동봉되므로 별도 설치 안내가 필요 없다 → 빈 InitializeSetup 삭제.

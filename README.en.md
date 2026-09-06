@@ -25,7 +25,7 @@ The Korean README is at [README.md](README.md).
 - ✅ Translation: opus-mt (en→ko fast-path) + m2m100 (multilingual fallback)
 - ✅ Unicode-script multilingual auto-routing
 - ✅ Self-capture feedback prevention (`SetWindowDisplayAffinity`)
-- ✅ System tray + global hotkeys (Ctrl+Shift+T/A/H/P)
+- ✅ System tray + global hotkeys (Ctrl+Shift+Q/A/H/P)
 - ✅ OverlayWindow (full-screen, mouse-through, multi-monitor)
 - ✅ UIA adapter for active window text (Phase 2/3)
 - ✅ DPAPI-encrypted persistent cache (Phase 4)
@@ -76,7 +76,7 @@ GitHub Actions release workflow at [.github/workflows/release.yml](.github/workf
 
 - UI: PySide6 (LGPL)
 - OCR: Tesseract (Apache 2.0) / PaddleOCRv5 (optional, Apache 2.0)
-- Translation: Helsinki-NLP/opus-mt-tc-big-en-ko (Apache 2.0) + facebook/m2m100_418M (MIT)
+- Translation: Helsinki-NLP/opus-mt-tc-big-en-ko (CC-BY-4.0, attribution required) + facebook/m2m100_418M (MIT)
 - Language detection: `unicodedata` script fast-path only (Latin/unknown = en). Pick the source combo for other languages
 - Persistent cache: Windows DPAPI (per-user encrypted)
 - Tray + global hotkeys: PySide6 `QSystemTrayIcon` + `keyboard` (MIT, optional)

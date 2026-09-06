@@ -45,7 +45,7 @@
 
 1. **로컬 추론** — 화면 내용의 클라우드 전송 없음. 비밀번호/대화/의료기록 안전
    (외부 통신은 최초 1회 모델 다운로드뿐)
-2. **상용 라이선스 호환** — PySide6 LGPL + opus-mt Apache 2.0 + m2m100 MIT (NLLB·PyQt5 GPL 회피)
+2. **상용 라이선스 호환** — PySide6 LGPL + opus-mt CC-BY-4.0 + m2m100 MIT (NLLB·PyQt5 GPL 회피)
 3. **자기 캡처 피드백 차단** — `WDA_EXCLUDEFROMCAPTURE`. 다른 OCR 오버레이 도구는 이 함정을 안 막음 (errors.md B-10)
 4. **한국어 사용자 친화** — 메뉴/UI/단축키 한국어 우선 설계
 5. **UIA + OCR 하이브리드** (계획) — UI Automation으로 정확하게, 못 읽는 영역만 OCR 폴백

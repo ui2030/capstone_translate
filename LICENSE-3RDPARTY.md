@@ -24,10 +24,42 @@ PyInstaller `--onedir` 빌드는 동적 .pyd로 함께 묶이므로 의무사항
 
 | 모델 | 라이선스 | 출처 |
 |---|---|---|
-| `Helsinki-NLP/opus-mt-tc-big-en-ko` | Apache 2.0 | Hugging Face |
+| `Helsinki-NLP/opus-mt-tc-big-en-ko` | **CC-BY-4.0** | Hugging Face |
+| `Helsinki-NLP/opus-mt-zh-en` | **CC-BY-4.0** | Hugging Face |
 | `facebook/m2m100_418M` | MIT | Hugging Face |
 
+`opus-mt-zh-en`은 중국어→한국어 피벗 번역의 앞다리다(zh→en→ko, `errors.md` M-9).
+중국어 화면이 실제로 나올 때만 지연 다운로드/로드된다.
+
+### CC-BY-4.0 의무 이행 (필수 저작자 표시)
+
+두 opus-mt 모델은 **CC-BY-4.0**이다 (모델 카드 YAML `license: cc-by-4.0` 실측 확인,
+en-ko 2026-08-03 / zh-en 2026-08-11). 상용 사용은 허용되지만 **저작자 표시**와
+**변경 사실 표시** 의무가 따른다.
+아래 문구를 배포물(본 문서)에 동봉하며, 앱 트레이 메뉴 "라이선스 정보"에서 열람할 수 있다.
+
+> Translation models: `Helsinki-NLP/opus-mt-tc-big-en-ko`, `Helsinki-NLP/opus-mt-zh-en`
+> © Language Technology Research Group at the University of Helsinki (OPUS-MT / Tatoeba-Challenge)
+> Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+> Cocktail은 모델 가중치를 **수정하지 않고** 원본 그대로 사용한다.
+> (토크나이저 입력 인코딩만 `source.spm`으로 우회한다 — 모델 파일 자체는 무변경. errors.md M-8)
+
+모델을 파인튜닝하거나 가중치를 변환(양자화/CT2 등)해 배포할 경우 **"변경했다"는 사실을 추가 명시**해야 한다.
+
+**PK-2 (2026-09-05): 배포물에 en-ko 가중치가 실제로 들어간다.** `build.spec`이
+`_internal/models/opus-mt-tc-big-en-ko/`(safetensors 399MB)를 동봉한다 — 그전까지는
+사용자 PC가 Hugging Face에서 받아갔으므로 "배포"가 아니었지만, 이제는 **우리가 재배포**한다.
+따라서 위 저작자 표시 문구를 인스톨러 산출물에 반드시 동봉해야 한다(`LICENSE-3RDPARTY.md`는
+`build.spec`의 `project_docs` 목록에 있어 `_internal/`에 함께 설치된다 — 확인 완료).
+`opus-mt-zh-en`과 `m2m100_418M`은 동봉하지 않고 필요할 때 사용자 PC가 내려받는다.
+
 **❌ 사용하지 않음**: `facebook/nllb-200-*` (CC-BY-NC, 비상용) — `errors.md` M-5 참고.
+2026-08-03 프로젝트 폴더의 `nllb_ct2/` 잔재(600MB)를 삭제 완료.
+
+**❌ 사용하지 않음**: `shun89/opus-mt-zh-ko` — zh→ko 후보로 실측했으나 채택하지 않았다
+(`errors.md` M-9). 라이선스를 apache-2.0으로 신고했지만 베이스가 CC-BY-4.0 opus-mt 라
+신고를 신뢰할 수 없고, 학습 데이터가 문서화돼 있지 않다. 3rd party 파인튜닝 가중치는
+상용 배포 기본 경로에서 제외한다.
 
 ---
 
@@ -37,9 +69,15 @@ PyInstaller `--onedir` 빌드는 동적 .pyd로 함께 묶이므로 의무사항
 |---|---|---|
 | **Tesseract OCR** (엔진) | Apache 2.0 | https://github.com/tesseract-ocr/tesseract |
 | **traineddata** (eng/kor/jpn/...) | Apache 2.0 | https://github.com/tesseract-ocr/tessdata_fast |
+| **Tesseract 동봉 DLL** (leptonica/libpng/libtiff/zlib/libcurl/libarchive 등) | Apache 2.0 / BSD / zlib / MIT 계열 | UB-Mannheim 배포판 그대로 |
 | **pytesseract** (Python 바인딩) | Apache 2.0 | https://pypi.org/project/pytesseract/ |
 | **PaddleOCR** (선택, optional) | Apache 2.0 | https://github.com/PaddlePaddle/PaddleOCR |
 | **PaddlePaddle** (선택) | Apache 2.0 | https://github.com/PaddlePaddle/Paddle |
+
+**PK-1 (2026-09-05): Tesseract 엔진(tesseract.exe + DLL 56개, v5.5.0)을 배포물에 동봉한다.**
+사용자에게 별도 설치를 요구하면 "준비 5분"(합격기준 6)이 깨진다. Apache 2.0은 재배포 시
+라이선스 원문과 NOTICE 동봉을 요구하므로 원본 배포판의 `doc/LICENSE`·`doc/AUTHORS`를
+`_internal/tesseract/doc/`에 같이 넣는다(`build.spec`).
 
 ---
 

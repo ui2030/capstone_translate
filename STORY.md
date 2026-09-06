@@ -157,7 +157,7 @@ OS가 데스크톱 합성에서 우리 윈도우를 빼므로 ImageGrab/mss/Prin
 ### 사용자 결정 + 박사 추천 → 동시 적용
 
 **M-5 — `HybridTranslator` 도입 (NLLB → opus-mt + m2m100)**:
-- 1차: `Helsinki-NLP/opus-mt-tc-big-en-ko` (Apache 2.0). en→ko에서 NLLB-600M과 품질 비슷, 사이즈 절반.
+- 1차: `Helsinki-NLP/opus-mt-tc-big-en-ko` (CC-BY-4.0). en→ko에서 NLLB-600M과 품질 비슷, 사이즈 절반.
 - 2차 폴백: `facebook/m2m100_418M` (MIT, any-to-any 100언어).
 - `BILINGUAL_MODELS` dict에 등록된 (src, tgt) → opus-mt fast-path. 그 외 → m2m100.
 - 언어 코드: NLLB BCP47 (`kor_Hang`) → ISO 639-1 (`ko`)로 통일.

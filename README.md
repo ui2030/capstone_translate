@@ -61,7 +61,7 @@ python diagnose_environment.py
 다음 개발 단계로 넘어가기 전 빠른 회귀 검사는:
 
 ```bash
-python smoke_tests.py
+python test_cocktail.py
 python pre_release_check.py
 ```
 
@@ -76,24 +76,41 @@ python pre_release_check.py
 
 자세한 4단계 빌드 절차는 [BUILD.md](BUILD.md).
 
+## 코드 구조
+
+2026-08-03에 단일 파일(`Cocktail완성본.py`, 3,310줄)에서 역할별 모듈로 분할했습니다.
+의존 방향은 **아래에서 위로만** 흐릅니다 — 아랫층은 윗층을 import 하지 않습니다.
+
+| 파일 | 역할 |
+|---|---|
+| `cocktail.py` | 엔트리포인트 — Qt 앱 생명주기, `--self-test` |
+| `cocktail_ui.py` | 설정 창 / 투명 오버레이 / 영역 편집기 |
+| `cocktail_engine.py` | 워커 루프 — 캡처→OCR→번역→표시 (`BackgroundController`) |
+| `cocktail_translate.py` | 번역 모델·캐시·표시 게이트 |
+| `cocktail_ocr.py` | Tesseract / PaddleOCR / UI Automation |
+| `cocktail_capture.py` | 캡처 영역·프레임 변화 감지 |
+| `cocktail_platform.py` | Windows API (창 속성 / DPAPI / 자동 실행) |
+
 ## 기술 스택
 
 - UI: PySide6 (LGPL — closed-source 상용 OK)
 - OCR: Tesseract (기본) / PaddleOCRv5 (선택)
-- 번역: Helsinki-NLP/opus-mt-tc-big-en-ko (Apache 2.0) + facebook/m2m100_418M (MIT)
+- 번역: Helsinki-NLP/opus-mt-tc-big-en-ko (CC-BY-4.0, 출처 표시 필요) + facebook/m2m100_418M (MIT)
 - 언어 감지: `unicodedata` script fast-path만 (라틴/불명 = en). 다른 언어는 source 콤보에서 명시
 - 자세한 내용: [TECH_STACK.md](TECH_STACK.md), [COMMERCIAL_SOTA_REVIEW.md](COMMERCIAL_SOTA_REVIEW.md)
 
 ## 라이선스 정책
 
 상용 호환만 사용:
-- PySide6 (LGPL), opus-mt (Apache 2.0), m2m100 (MIT), Tesseract (Apache 2.0), tessdata (Apache 2.0)
+- PySide6 (LGPL), opus-mt (CC-BY-4.0), m2m100 (MIT), Tesseract (Apache 2.0), tessdata (Apache 2.0)
 - ❌ NLLB (CC-BY-NC) / PyQt5 (GPL) / 비상용 모델은 사용 안 함
 
-> ⚠️ **작업 폴더에 `nllb_ct2/`(약 600MB)가 남아 있습니다.** M-5에서 폐기된 NLLB(CC-BY-NC)
-> 변환 모델 잔재로, 코드는 이 폴더를 참조하지 않고 빌드 산출물(`dist/`)·인스톨러에도
-> 포함되지 않습니다(`build.spec`은 명시한 파일만 담고, `.claudeignore`에도 등록됨).
-> 다만 **소스 배포/저장소 공개 전에는 삭제해야 합니다** — 비상용 라이선스 자산이기 때문입니다.
+> ✅ 폐기된 NLLB(CC-BY-NC) 변환 모델 잔재 `nllb_ct2/`(약 600MB)는 **2026-08-03 삭제 완료**.
+> `.gitignore`·`pre_release_check.py`가 재추가를 차단합니다.
+
+> ℹ️ **opus-mt는 CC-BY-4.0입니다** — 상용 사용은 가능하지만 **출처 표시 의무**가 있습니다.
+> 배포물에 [LICENSE-3RDPARTY.md](LICENSE-3RDPARTY.md)를 동봉하세요(빌드에 이미 포함).
+> 앱에서는 트레이 → "라이선스 정보"로 열람할 수 있습니다.
 
 상세는 [BUILD.md](BUILD.md) 라이선스 체크리스트, [LICENSE-3RDPARTY.md](LICENSE-3RDPARTY.md),
 [COMMERCIAL_SOTA_REVIEW.md](COMMERCIAL_SOTA_REVIEW.md), [VISION_AND_ROADMAP.md](VISION_AND_ROADMAP.md) 참고.
@@ -111,7 +128,7 @@ python pre_release_check.py
 - [TECH_STACK.md](TECH_STACK.md) — 사용 기술 한 페이지
 - [COMMERCIAL_SOTA_REVIEW.md](COMMERCIAL_SOTA_REVIEW.md) — SOTA/상용 라이선스 기준선
 - [UPDATE_LOG.md](UPDATE_LOG.md) — 변경 일지
-- [smoke_tests.py](smoke_tests.py) — 다음 단계 전 빠른 회귀 검사
+- [test_cocktail.py](test_cocktail.py) — 실동작 회귀 테스트 (`--full`이면 번역 모델까지 로드)
 - [pre_release_check.py](pre_release_check.py) — 배포 전 파일/워크플로우/라이선스 정책 검사
 - [BUILD.md](BUILD.md) — 빌드/배포 절차
 - [CODE_SIGNING.md](CODE_SIGNING.md) — Windows 코드 서명 (Authenticode) 가이드

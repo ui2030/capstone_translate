@@ -1,0 +1,899 @@
+"""Cocktail — 번역 계층.
+
+번역 모델(opus-mt / m2m100 하이브리드), 메모리 LRU + DPAPI 영구 캐시,
+언어 스크립트 판정, 표시 직전 게이트(DG-1), 배치 번역.
+OCR·UI를 import 하지 않는다.
+
+라이선스: opus-mt-tc-big-en-ko는 **CC-BY-4.0**(출처 표시 의무).
+LICENSE-3RDPARTY.md의 저작자 표기를 배포물에 동봉해야 한다.
+"""
+import os
+import re
+import sys
+import threading
+import unicodedata
+from collections import OrderedDict
+
+from cocktail_platform import dpapi_protect, dpapi_unprotect
+
+
+# --- RP-1 튜닝 레버: 신경망 번역 반복 붕괴 방지 ------------------------------
+# 잡음 입력(OCR 쓰레기)에서 seq2seq가 같은 구를 무한 반복하는 고전적 붕괴를 막는다.
+# 3은 한국어 정상 문장(어미·조사 반복)에도 걸릴 수 있어 4를 기본으로 둔다.
+NO_REPEAT_NGRAM_SIZE = 4          # ↓3이면 더 강하게 억제(정상 문장 왜곡 위험), ↑5면 관대
+
+
+# --- DG-1 튜닝 레버: 표시 직전 최종 게이트 (7차) ------------------------------
+# 원칙: "확신 없으면 숨긴다". 깨진 자막을 보여주는 것보다 안 보여주는 게 낫다.
+# NZ-1(원문 문자 구성)은 OCR이 "말이 되는 오독"을 하면 뚫린다(초소형 캡션 →
+# "마우 냄비 thang에"류 그럴싸한 쓰레기). 번역까지 끝난 뒤 마지막으로 한 번 더 거른다.
+DISPLAY_GATE_ENABLED = True            # False면 게이트 전체 무효(디버그용)
+DISPLAY_TINY_LINE_PX = 12              # 원문 라인 높이(물리 px)가 이 미만이면 "극소 라인"
+# DG-1b(2026-09-05): 70 → 60. 70은 근거 없이 잡은 값이었고, 채점판에서 **정상 줄만** 잡았다.
+# 실측 (bench 시료 전체 중 line_px < 16 라인 36개, + 6~12px 합성 캡션 코퍼스):
+#     정상으로 읽힌 극소 라인   conf 64.0(다크 UI "4 spaces") · 나머지 전부 81~96
+#     오독/부분 인식 극소 라인   conf 46.8 ("ae provisional November ean", 정답유사 0.66)
+#     오독 쓰레기 6~7px 캡션    conf 49.7~73.2 — 단 라인 높이가 14px 이상이라 이 규칙 밖이다
+# → px<12 구간에서 실측된 유일한 쓰레기는 46.8이고 유일한 정상 탈락은 64.0이다.
+#   60은 그 사이에 있고 46.8을 여전히 막는다. 오탐(정상 줄 숨김)은 무음 실패라 더 비싸다.
+# ↑면 더 많이 숨긴다(쓰레기도, 정상도). ↓면 깨진 자막이 새어나온다.
+DISPLAY_TINY_LINE_MIN_CONF = 60.0      # 극소 라인은 평균 conf가 이 이상일 때만 신뢰
+DISPLAY_MIN_TGT_SCRIPT_RATIO = 0.3     # 번역문 글자 중 목표 언어 스크립트 비율 하한 (한국어 목표인데 한글 극소 = 실패)
+DISPLAY_LEN_COLLAPSE_MIN_SRC = 20      # 원문이 이 길이 이상일 때만 길이 붕괴 검사
+DISPLAY_LEN_COLLAPSE_RATIO = 0.15      # 번역문/원문 길이 하한. 한국어는 보통 0.5배 이상이라 0.15는 보수적
+
+# --- CO-1: 미번역 잔류 검사 ---------------------------------------------------
+# 번역 모델은 모르는 토큰을 **그대로 복사**한다. OCR이 "grants"를 "arants"로 읽으면
+# 그 단어는 사전에 없으니 출력에 영어 그대로 남는다. 실측(게임 툴팁, 2026-08-05):
+#     "4회씩 각 dealing 156 피해 (4.25 첨부 speed) (3.55 쿨다운,"
+# 한글 비율이 0.3을 넘으니 규칙 2(tgt-script)를 통과한다. 그래서 별도 규칙이 필요하다.
+# 정책: 반쯤 번역된 헛소리를 보여주느니 원문을 그대로 보게 둔다.
+DISPLAY_CARRYOVER_MIN_LEN = 3          # 이 길이 이상 라틴 단어만 센다 (of/to 같은 건 무시)
+DISPLAY_MAX_CARRYOVER_WORDS = 0        # **짧은 줄**의 절대 허용치. 고유명사·약어는 대문자로
+                                       # 시작/구성돼 애초에 안 센다("HP", "Ss", "Ur" 통과).
+                                       # 대가: 'github', 'npm' 처럼 **소문자 고유명사**가 든
+                                       # 정상 번역도 숨는다. 그런 화면을 자주 본다면 1~2로 ↑.
+# --- CO-2: 절대 허용치는 문단에 쓰면 안 된다 ---------------------------------
+# CO-1의 0은 게임 툴팁 **한 줄**(30~60자) 기준으로 잡은 값인데, 그 뒤 PM-1(문단 병합)이
+# 게이트의 판정 단위를 200~350자 문단으로 키웠다. 40단어 문단에서 OCR이 단어 하나를 틀리면
+# (긴 희귀어일수록 잘 틀린다) 번역기가 그 한 단어를 그대로 복사하고, 나머지 39단어가 멀쩡해도
+# **문단 전체가 사라진다**. 실측(어린왕자 4쪽, 2026-08-11) — 1글자 오독 주입 8종 중 3종이
+# 문단 통째 숨김을 유발했다:
+#     constrictor→consttictor : carryover(constitctor) → 346자 문단 전멸
+#     elephant   →elephanl    : carryover(elephanl)    → 346자 문단 전멸
+#     disheartened→disheattened: carryover(disheattened) → 204자 문단 전멸
+# → 허용치를 **번역문 길이에 비례**시킨다. 짧은 줄은 지금과 똑같이 무관용(0),
+#   긴 문단은 단어 한둘까지 견딘다. 게임 툴팁 fixture는 그대로 걸린다(10어절/잔류 2 > 허용 1).
+DISPLAY_CARRYOVER_MAX_RATIO = 0.12     # 허용치 = max(절대치, 번역문 어절 수 × 이 비율).
+                                       # 9어절 미만=0, 9~16=1, 17~25=2 … ↓면 더 엄격
+
+# 목표 언어별로 "번역이 실제로 일어났다면 나와야 하는" 스크립트.
+_LANG_TO_SCRIPTS = {
+    "ko": {"HANGUL"},
+    "ja": {"HIRAGANA", "KATAKANA", "CJK"},
+    "zh": {"CJK"},
+    "ru": {"CYRILLIC"},
+    "en": {"LATIN"},
+    "fr": {"LATIN"},
+    "de": {"LATIN"},
+}
+
+
+# --- 번역 백엔드: HybridTranslator (M-5) -----------------------------------
+# LZ-1: torch/transformers는 **import 시점에 끌어오지 않는다**. 실측(2026-09-05)
+#   import cocktail_ui 10.24s 중 torch 2.3s + transformers 2.0s(그 안에서 torch._dynamo
+#   2.0s + sklearn.metrics 1.4s를 또 끌고 온다). 사람이 기다리는 건 창이 뜨는 시간이고,
+#   모델은 어차피 `BackgroundController._preload_model` 백그라운드 스레드가 로드한다.
+# 그 스레드(또는 첫 translate)가 `_ensure_torch()`를 부르는 순간 진짜 import가 일어난다.
+torch = None            # _ensure_torch() 이후 실제 모듈
+device = None           # 같음. import 전에 읽으면 None이다
+USE_FP16 = False
+_LOAD_DTYPE = None
+_TORCH_LOCK = threading.Lock()
+
+
+def _ensure_torch():
+    """torch를 지금 import하고 device/dtype 전역을 채운다 (LZ-1). 두 번째부터는 즉시 반환."""
+    global torch, device, USE_FP16, _LOAD_DTYPE
+    if torch is not None:
+        return torch
+    with _TORCH_LOCK:
+        if torch is not None:
+            return torch
+        import torch as _torch
+        device = _torch.device("cuda" if _torch.cuda.is_available() else "cpu")
+        USE_FP16 = device.type == "cuda"
+        # VR-1: 로드 시점에 바로 fp16으로 올린다. `from_pretrained() → .to(cuda) → .half()` 순서는
+        # fp32 사본을 먼저 VRAM에 올려 **최종 크기의 2배**를 순간적으로 점유한다(m2m100_418M 기준
+        # 약 1.9GB 피크 → 0.98GB). en-ko + zh-en 이 이미 떠 있는 상태에서 m2m100 폴백을 올리다
+        # CUDA OOM(16 MiB 요청 실패)이 난 실측(2026-09-05)이 있어 피크를 반으로 줄인다.
+        _LOAD_DTYPE = _torch.float16 if USE_FP16 else _torch.float32
+        print(f"[INFO] device={device}, fp16={USE_FP16}")
+        torch = _torch   # 마지막에 대입 — 다른 스레드가 "준비 완료"로 보는 순간이다
+        return torch
+
+
+# --- PK-2: 배포본에 동봉된 모델 --------------------------------------------
+# 기본 언어쌍(en→ko, safetensors 399MB)만 동봉한다. 첫 실행에 1.6GB를 받게 하면
+# "준비 5분"(합격기준 6)이 회선 상태에 걸리고, 오프라인이 강점인 앱이 첫 실행에만
+# 인터넷을 요구하게 된다. 나머지(zh-en 300MB, m2m100 폴백 1.9GB)는 그 언어를 실제로
+# 번역할 때만 받는다 — 전부 넣으면 인스톨러가 3GB를 넘는다.
+# 배치: `<앱폴더>/models/<모델 leaf 이름>/` (build.spec 이 채운다).
+_SEARCH_DIRS = [d for d in (os.path.dirname(os.path.abspath(
+    (sys.argv[0] if sys.argv else "") or ".")), getattr(sys, "_MEIPASS", None)) if d]
+
+
+def _bundled_model_dir(model_name: str):
+    """동봉된 모델 폴더 경로. 없으면 None(= HF 캐시/네트워크 경로 그대로)."""
+    leaf = model_name.split("/")[-1]
+    for d in _SEARCH_DIRS:
+        p = os.path.join(d, "models", leaf)
+        if os.path.isfile(os.path.join(p, "config.json")):
+            return p
+    return None
+
+
+def _load_local_first(loader, model_name, **kwargs):
+    """LD-1: 로컬 HF 캐시 우선 로드.
+
+    `local_files_only=True`로 먼저 시도해 HF Hub 네트워크 왕복(캐시가 있어도 수십 초
+    걸리던 rate-limit/파일 목록 확인)을 건너뛴다. 캐시가 없거나 불완전하면 예외가 나므로
+    그때만 네트워크 경로로 재시도한다 — 첫 설치는 그대로 동작.
+    `HF_HUB_OFFLINE` 같은 전역 오프라인 강제는 첫 설치를 망가뜨리므로 쓰지 않는다.
+    PK-2: 동봉본이 있으면 그 폴더에서 바로 읽는다(캐시 복사 없음).
+    """
+    model_name = _bundled_model_dir(model_name) or model_name
+    try:
+        return loader(model_name, local_files_only=True, **kwargs)
+    except Exception as e:
+        print(f"[INFO] 로컬 캐시 미스 → 네트워크 로드 ({model_name}): {type(e).__name__}")
+        return loader(model_name, **kwargs)
+
+
+class _BaseTranslator:
+    name = "base"
+    def translate_batch(self, texts, src, tgt):
+        raise NotImplementedError
+
+
+class OpusMtTranslator(_BaseTranslator):
+    """
+    Helsinki-NLP/opus-mt-* — CC-BY-4.0 (출처 표시 의무). 언어쌍별 전용 모델.
+    en→ko 등 자주 쓰는 쌍에서 m2m100/NLLB 대비 작고 빠르고 품질 우수.
+    """
+    name = "opus-mt"
+
+    def __init__(self, model_name: str, progress_cb=None):
+        print(f"[INFO] opus-mt 로드 중: {model_name}")
+        if progress_cb: progress_cb("번역 엔진 초기화 중")
+        _ensure_torch()   # LZ-1
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        if progress_cb: progress_cb("토크나이저 로드 중")
+        # LD-1: 로컬 캐시 우선 (네트워크 체크로 로드가 수십 초 걸리던 문제)
+        self.tok = _load_local_first(AutoTokenizer.from_pretrained, model_name)
+        if progress_cb: progress_cb("모델 다운로드/로드 중")
+        m = _load_local_first(AutoModelForSeq2SeqLM.from_pretrained, model_name,
+                              torch_dtype=_LOAD_DTYPE).to(device)   # VR-1
+        m.eval()
+        self.model = m
+        self.src_sp = self._load_source_spm(model_name)  # M-8
+        if progress_cb: progress_cb("워밍업 중")
+        try:
+            with torch.inference_mode():
+                enc = self.tok(["hello"], return_tensors="pt", padding=True).to(device)
+                self.model.generate(**enc, max_new_tokens=8, num_beams=1)
+        except Exception as e:
+            print(f"[WARN] opus-mt 워밍업 실패: {e}")
+
+    def _load_source_spm(self, model_name):
+        """M-8: sepvoc(소스/타깃 vocab 분리) opus-mt 모델은 repo의 tokenizer_config.json이
+        separate_vocabs=false로 잘못 적혀 있어 AutoTokenizer가 소스 문장을 타깃 vocab으로
+        인코딩한다(→ 대부분 <unk>, 번역 결과가 쓰레기). source.spm으로 직접 인코딩한다.
+        공유 vocab 모델이면 None(기존 경로 유지), 로드 실패해도 None으로 degrade."""
+        try:
+            import sentencepiece as spm
+            from huggingface_hub import snapshot_download
+            # LD-1: 로컬 스냅샷 우선 — 캐시가 있어도 매번 14개 파일 목록을 Hub에 묻던 경로.
+            # PK-2: 동봉본은 그 폴더가 곧 스냅샷이다(snapshot_download는 repo id만 받는다).
+            snapshot_dir = (_bundled_model_dir(model_name)
+                            or _load_local_first(snapshot_download, model_name))
+            sp = spm.SentencePieceProcessor(
+                model_file=os.path.join(snapshot_dir, "source.spm")
+            )
+            vocab = self.tok.get_vocab()
+            size = sp.get_piece_size()
+            missing = sum(1 for i in range(0, size, 16) if sp.id_to_piece(i) not in vocab)
+            if missing * 16 < size * 0.2:
+                return None  # 소스 조각이 토크나이저 vocab에 있음 = 공유 vocab, 기존 경로가 정상
+            print(f"[INFO] sepvoc 모델 감지, source.spm 직접 인코딩 (M-8): {model_name}")
+            return sp
+        except Exception as e:
+            print(f"[WARN] source.spm 로드 실패, 기존 토크나이저 경로 사용 (M-8): {e}")
+            return None
+
+    def _encode_with_spm(self, texts):
+        pad = self.tok.pad_token_id
+        seqs = [self.src_sp.encode(t)[:255] + [self.tok.eos_token_id] for t in texts]
+        n = max(len(s) for s in seqs)
+        return {
+            "input_ids": torch.tensor(
+                [s + [pad] * (n - len(s)) for s in seqs], dtype=torch.long).to(device),
+            "attention_mask": torch.tensor(
+                [[1] * len(s) + [0] * (n - len(s)) for s in seqs], dtype=torch.long).to(device),
+        }
+
+    def translate_batch(self, texts, src, tgt):
+        # opus-mt는 언어쌍 전용이라 src/tgt는 라우팅 검증용으로만 사용 (모델은 이미 결정됨)
+        if self.src_sp is not None:
+            enc = self._encode_with_spm(texts)  # M-8
+        else:
+            enc = self.tok(
+                texts, return_tensors="pt", padding=True, truncation=True, max_length=256
+            ).to(device)
+        in_len = enc["input_ids"].shape[1]
+        max_new = min(256, int(in_len * 1.6) + 16)
+        with torch.inference_mode():
+            out = self.model.generate(
+                **enc,
+                max_new_tokens=max_new,
+                num_beams=1,
+                do_sample=False,
+                early_stopping=False,
+                no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,  # RP-1
+            )
+        return self.tok.batch_decode(out, skip_special_tokens=True)
+
+
+class M2M100Translator(_BaseTranslator):
+    """
+    facebook/m2m100_418M — MIT. any-to-any 100언어 폴백.
+    opus-mt에 등록 안 된 쌍에서만 호출됨.
+    """
+    name = "m2m100"
+
+    def __init__(self, model_name: str = "facebook/m2m100_418M"):
+        print(f"[INFO] m2m100 로드 중: {model_name}")
+        _ensure_torch()   # LZ-1
+        from transformers import M2M100ForConditionalGeneration, M2M100Tokenizer
+        # LD-1: 로컬 캐시 우선
+        self.tok = _load_local_first(M2M100Tokenizer.from_pretrained, model_name)
+        m = _load_local_first(M2M100ForConditionalGeneration.from_pretrained, model_name,
+                              torch_dtype=_LOAD_DTYPE).to(device)   # VR-1
+        m.eval()
+        self.model = m
+        try:
+            with torch.inference_mode():
+                self.tok.src_lang = "en"
+                enc = self.tok(["hello"], return_tensors="pt", padding=True).to(device)
+                self.model.generate(
+                    **enc,
+                    forced_bos_token_id=self.tok.get_lang_id("ko"),
+                    max_new_tokens=8,
+                    num_beams=1,
+                )
+        except Exception as e:
+            print(f"[WARN] m2m100 워밍업 실패: {e}")
+
+    def translate_batch(self, texts, src, tgt):
+        # src/tgt = ISO 639-1 ("en", "ko", "fr", ...)
+        self.tok.src_lang = src
+        enc = self.tok(
+            texts, return_tensors="pt", padding=True, truncation=True, max_length=256
+        ).to(device)
+        in_len = enc["input_ids"].shape[1]
+        max_new = min(256, int(in_len * 1.6) + 16)
+        with torch.inference_mode():
+            out = self.model.generate(
+                **enc,
+                forced_bos_token_id=self.tok.get_lang_id(tgt),
+                max_new_tokens=max_new,
+                num_beams=1,
+                do_sample=False,
+                early_stopping=False,
+                no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,  # RP-1
+            )
+        return self.tok.batch_decode(out, skip_special_tokens=True)
+
+
+class HybridTranslator:
+    """
+    M-5: 라우팅
+      - BILINGUAL_MODELS에 등록된 (src, tgt) → opus-mt (작고 빠름)
+      - 그 외 → m2m100 (any-to-any 폴백)
+    P-9: lazy load — __init__은 가볍고, 모델은 첫 사용/preload 시 로드.
+    """
+    name = "hybrid"
+
+    # ISO 639-1 (src, tgt) → opus-mt 모델. 자주 쓰는 쌍을 늘리려면 여기 등록 (라이선스 확인 필수).
+    BILINGUAL_MODELS = {
+        ("en", "ko"): "Helsinki-NLP/opus-mt-tc-big-en-ko",
+        ("zh", "en"): "Helsinki-NLP/opus-mt-zh-en",   # M-9: zh→ko 피벗의 앞다리
+        # 예: ("ko", "en"): "Helsinki-NLP/opus-mt-tc-big-ko-en",
+    }
+
+    # --- M-9: 전용 모델이 없는 쌍의 중간 언어 경유 -----------------------------
+    # 중국어→한국어 전용 opus-mt 는 **없다**(2026-08-11 확인: Helsinki-NLP/opus-mt-zh-ko,
+    # opus-mt-tc-big-zh-ko 둘 다 RepositoryNotFound). 그래서 이 쌍은 m2m100_418M
+    # 폴백으로 흘러가 있었는데, 실측에서 주어를 통째로 흘렸다.
+    #     "小美站在河边…" → "**은** 강 옆에 서서…"   (小美 증발)
+    #     "小美看看四周…" → "**이 이** 주위를 둘러보고…"
+    #
+    # 후보 실측 (중국어 12문장 → 한국어, chrF, RTX GPU / fp16, 2026-08-11):
+    #     m2m100_418M 직행 (현행)                       chrF 24.5   582 ms   MIT
+    #     shun89/opus-mt-zh-ko (3rd party 파인튜닝)     chrF 28.3   294 ms   apache-2.0(업로더 신고)
+    #     **zh→en(opus-mt-zh-en) → en→ko(기존 모델)**   chrF 32.0   497 ms   CC-BY-4.0  ← 채택
+    #     opus-mt-tc-bible-big-mul-mul                  chrF  4.5   434 ms   apache-2.0
+    # 채택 근거:
+    #   - 품질 1위. 2위(3rd party)보다 +3.7, 현행보다 +7.5.
+    #   - 라이선스가 이미 배포 중인 en-ko 와 같은 CC-BY-4.0 (Helsinki 공식) — 상용 가능.
+    #     shun89 는 라이선스를 apache-2.0 으로 신고했지만 베이스가 CC-BY-4.0 opus-mt 라
+    #     신고가 신뢰되지 않고, 학습 데이터도 문서화돼 있지 않다(다운로드 175회).
+    #   - mul-mul 은 성경 코퍼스만 학습해 쓸 수 없다(출력이 고문체 한국어, 때때로 과라니어).
+    #   - NLLB 계열은 CC-BY-NC(비상업)라 애초에 후보가 아니다 — M-5/E-10.
+    # 비용: 중국어 화면에서만 모델 하나(312MB)와 generate 1회가 추가된다. 영어 화면은
+    # 이 경로를 밟지 않으므로 그대로다.
+    # 올리는 길: 양쪽 다리에 num_beams=4 → chrF 35.0 (810 ms). 품질 +3, 시간 +63%.
+    PIVOT_ROUTES = {("zh", "ko"): "en"}
+
+    def __init__(self):
+        self._bilingual = {}        # (src, tgt) -> OpusMtTranslator
+        self._multilingual = None   # M2M100Translator (lazy)
+        self._load_lock = threading.Lock()
+        self._loading = set()       # P-9b: 백그라운드 로드 중인 (src, tgt)
+        self._m2m_loading = False   # P-9b: m2m100 폴백 백그라운드 로드 중
+
+    def _ensure_bilingual(self, src, tgt, progress_cb=None, block=True):
+        key = (src, tgt)
+        if key in self._bilingual:
+            return self._bilingual[key]
+        model_name = self.BILINGUAL_MODELS.get(key)
+        if not model_name:
+            return None
+        if not block:
+            # P-9b: 워커 스레드에서 첫 로드(다운로드 포함 수십 초)를 기다리면 화면이 통째로
+            # 언다. 로드는 백그라운드로 던지고 지금은 None — 호출부는 그동안 폴백을 쓴다.
+            if key not in self._loading:
+                self._loading.add(key)
+                threading.Thread(target=self._background_load, args=(src, tgt),
+                                 daemon=True).start()
+            return None
+        with self._load_lock:
+            if key not in self._bilingual:
+                self._bilingual[key] = OpusMtTranslator(model_name, progress_cb=progress_cb)
+            return self._bilingual[key]
+
+    def _background_load(self, src, tgt):
+        try:
+            self._ensure_bilingual(src, tgt)
+        except Exception as e:
+            # 실패를 기억하지 않는다 — 다음 프레임에 다시 시도한다. 그동안은 폴백이 돈다.
+            self._loading.discard((src, tgt))
+            print(f"[WARN] {src}->{tgt} 모델 로드 실패, m2m100 폴백 유지: {e}")
+
+    def _ensure_multilingual(self, block=True):
+        if self._multilingual is not None:
+            return self._multilingual
+        if not block:
+            # P-9b: m2m100 첫 로드는 실측 4.0초. 워커 스레드에서 기다리면 그 프레임의
+            # **모든** 줄이 그동안 안 뜬다. 로드는 백그라운드로 던지고 지금은 None —
+            # 호출부는 이번 프레임만 이 언어 그룹을 포기한다(다음 프레임엔 준비돼 있다).
+            if not self._m2m_loading:
+                self._m2m_loading = True
+                threading.Thread(target=self._background_multilingual, daemon=True).start()
+            return None
+        with self._load_lock:
+            if self._multilingual is None:
+                self._multilingual = M2M100Translator("facebook/m2m100_418M")
+            return self._multilingual
+
+    def _background_multilingual(self):
+        try:
+            self._ensure_multilingual()
+        except Exception as e:
+            print(f"[WARN] m2m100 로드 실패: {e}")
+        finally:
+            self._m2m_loading = False   # 실패를 기억하지 않는다 — 다음 프레임에 다시 시도
+
+    def preload_default(self, progress_cb=None):
+        """en→ko opus-mt 미리 로드 (백그라운드 호출용, P-9)."""
+        self._ensure_bilingual("en", "ko", progress_cb=progress_cb)
+        if progress_cb: progress_cb("준비 완료")
+
+    def translate_batch(self, texts, src, tgt):
+        direct = self._ensure_bilingual(src, tgt)
+        if direct is not None:
+            return direct.translate_batch(texts, src, tgt)
+        # M-9: 전용 모델이 없으면 중간 언어 경유를 먼저 시도한다(m2m100 폴백보다 낫다).
+        # 두 다리 다 준비돼 있을 때만 — 아직 로딩 중이면 이번 프레임은 폴백이 처리한다.
+        mid = self.PIVOT_ROUTES.get((src, tgt))
+        if mid:
+            first = self._ensure_bilingual(src, mid, block=False)
+            second = self._ensure_bilingual(mid, tgt, block=False)
+            if first is not None and second is not None:
+                return second.translate_batch(
+                    first.translate_batch(texts, src, mid), mid, tgt)
+        fallback = self._ensure_multilingual(block=False)
+        if fallback is None:
+            raise RuntimeError("m2m100 폴백 모델 로드 중")   # TE-1: 이 그룹만 이번 프레임 포기
+        return fallback.translate_batch(texts, src, tgt)
+
+
+# 가벼운 인스턴스만 만들기 (모델은 아직 로드 안 됨, P-9)
+TRANSLATOR = HybridTranslator()
+
+
+# --- 번역 캐시 (P-5) --------------------------------------------------------
+class LRU(OrderedDict):
+    def __init__(self, capacity=512):
+        super().__init__()
+        self.capacity = capacity
+
+    def get_or_none(self, key):
+        if key in self:
+            self.move_to_end(key)
+            return self[key]
+        return None
+
+    def put(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        self[key] = value
+        while len(self) > self.capacity:
+            self.popitem(last=False)
+
+
+TRANS_CACHE = LRU(capacity=1024)
+CACHE_LOCK = threading.Lock()
+
+
+# --- 언어 코드 (ISO 639-1) — M-5: NLLB BCP47에서 변경 ---------------------
+LANG_MAP = {
+    "Korean":   "ko",
+    "English":  "en",
+    "French":   "fr",
+    "German":   "de",
+    "Chinese":  "zh",
+    "Japanese": "ja",
+}
+
+# DC-1: `M2M100_LANGS`(100개 언어 집합)는 정의만 되고 어디서도 참조되지 않아 삭제했다.
+# _SCRIPT_TO_LANG이 내놓는 코드(ko/ja/zh/ar/ru/he/hi/th/el/bn/pa/gu/ta/ml/km/lo/my)는
+# 전부 m2m100이 아는 코드라 별도 필터가 필요 없었다.
+
+_SCRIPT_TO_LANG = {
+    "HANGUL": "ko",
+    "HIRAGANA": "ja",
+    "KATAKANA": "ja",
+    "CJK": "zh",
+    "ARABIC": "ar",
+    "CYRILLIC": "ru",
+    "HEBREW": "he",
+    "DEVANAGARI": "hi",
+    "THAI": "th",
+    "GREEK": "el",
+    "BENGALI": "bn",
+    "GURMUKHI": "pa",
+    "GUJARATI": "gu",
+    "TAMIL": "ta",
+    "MALAYALAM": "ml",
+    "KHMER": "km",
+    "LAO": "lo",
+    "MYANMAR": "my",
+}
+
+def _unicode_script(ch: str) -> str:
+    """OCR 문자열의 Unicode script를 대략 분류한다. 숫자/기호는 COMMON으로 무시."""
+    if not ch or not ch.strip():
+        return "COMMON"
+    name = unicodedata.name(ch, "")
+    cat = unicodedata.category(ch)
+    if not cat.startswith("L"):
+        return "COMMON"
+    if "HANGUL" in name:
+        return "HANGUL"
+    if "HIRAGANA" in name:
+        return "HIRAGANA"
+    if "KATAKANA" in name:
+        return "KATAKANA"
+    if "CJK UNIFIED" in name or "CJK COMPATIBILITY" in name:
+        return "CJK"
+    for script in _SCRIPT_TO_LANG:
+        if script in name:
+            return script
+    if "LATIN" in name:
+        return "LATIN"
+    if cat.startswith("L"):
+        return "OTHER"
+    return "COMMON"
+
+
+def detect_script(text: str) -> tuple[str, dict[str, int]]:
+    """문자열의 지배적인 Unicode script를 반환한다. 라틴은 SL-1에서 무조건 en."""
+    counts = {}
+    for ch in text or "":
+        script = _unicode_script(ch)
+        if script == "COMMON":
+            continue
+        counts[script] = counts.get(script, 0) + 1
+    if not counts:
+        return "UNKNOWN", counts
+
+    # 일본어는 CJK 한자와 kana가 섞이는 경우가 많으므로 kana가 보이면 ja로 본다.
+    if counts.get("HIRAGANA", 0) or counts.get("KATAKANA", 0):
+        return "HIRAGANA" if counts.get("HIRAGANA", 0) >= counts.get("KATAKANA", 0) else "KATAKANA", counts
+
+    dominant = max(counts.items(), key=lambda kv: kv[1])[0]
+    if dominant == "LATIN":
+        non_latin = {k: v for k, v in counts.items() if k != "LATIN"}
+        if non_latin:
+            script, n = max(non_latin.items(), key=lambda kv: kv[1])
+            total = sum(counts.values())
+            if script in _SCRIPT_TO_LANG and (n >= 2 or n / total >= 0.35):
+                return script, counts
+    return dominant, counts
+
+
+def identify_language(text: str, fallback: str = "en") -> str:
+    """
+    SL-1: 문자 스크립트로 확정되는 언어만 인정한다(한글→ko, 가나→ja, CJK→zh, 키릴→ru…).
+    라틴·불명 스크립트는 추측하지 않고 전부 fallback(기본 en) — 이 한 줄이
+    "영어 화면을 cy/hu/de/pt/so로 오판 → m2m100 폴백 → 5초 배치" 사슬을 끊는다.
+    다른 라틴 언어(프랑스어 등)를 읽어야 하면 사용자가 src 콤보에서 명시한다.
+    """
+    script, _ = detect_script(text)
+    return _SCRIPT_TO_LANG.get(script, fallback)
+
+
+def assign_region_languages(ocr_results, src_lang_hint):
+    """
+    src=auto면 라인마다 결정론적 스크립트 판정만 적용한다(SL-1).
+    사용자가 source 언어를 명시하면 그대로 강제한다.
+    (M-7 region 투표 / LG-1 지배 언어 스냅은 라틴 추측을 보정하려고 있던 장치라
+     추측이 사라진 지금은 존재 이유가 없어 함께 퇴역.)
+    """
+    if src_lang_hint != "auto":
+        return [src_lang_hint] * len(ocr_results)
+    return [identify_language(text) for text, _, _ in ocr_results]
+
+
+def display_gate_reject(src_text, tgt_text, tgt_lang, line_px=None, conf=None):
+    """DG-1 표시 게이트의 **단일 진입점**. 사유를 돌려주면 호출부는 그 줄을 안 그린다.
+
+    CO-2: 숨김은 무음 실패다 — 사용자에게는 "그 문단만 자막이 없다"로만 보이고 로그엔
+    아무것도 안 남아 원인 추적이 불가능했다. 여기서 사유 + 원문 머리를 한 번 찍는다.
+    (라인당 1회. 정적 화면이 초당 몇 번씩 같은 줄을 재판정해도 로그는 늘지 않는다.)
+    """
+    reason = _display_gate_reason(src_text, tgt_text, tgt_lang, line_px, conf)
+    if reason:
+        _log_gate_reject(reason, src_text)
+    return reason
+
+
+_GATE_LOG_SEEN = OrderedDict()   # (사유 종류, 원문 머리) — 같은 줄 반복 로그 억제
+_GATE_LOG_CAP = 64
+
+
+def _log_gate_reject(reason, src_text):
+    head = _cache_key_text(src_text or "")[:60]
+    key = (reason.split("(")[0], head)
+    if key in _GATE_LOG_SEEN:
+        return
+    _GATE_LOG_SEEN[key] = None
+    while len(_GATE_LOG_SEEN) > _GATE_LOG_CAP:
+        _GATE_LOG_SEEN.popitem(last=False)
+    print(f'[INFO] DG-1 숨김: {reason} "{head}"')
+
+
+def _display_gate_reason(src_text, tgt_text, tgt_lang, line_px=None, conf=None):
+    """DG-1 (7차): 표시 직전 최종 게이트. 거부 사유 문자열을 반환하면 그 줄은 **그리지 않는다**.
+
+    NZ-1은 OCR 원문의 문자 구성만 본다. 초소형 캡션(7px대)에서 OCR이 "말이 되는 오독"을
+    하면(예: "마우 냄비 thang에") 원문도 번역문도 형태상 멀쩡해 보여 전부 통과한다.
+    그래서 번역이 끝난 뒤 "이 줄을 믿을 근거가 있는가"를 마지막으로 한 번 더 묻는다.
+
+    규칙은 넷 다 **거짓 양성(정상 줄을 숨김)이 나기 어려운 쪽**으로 잡았다:
+      1. 극소 라인 + 낮은 원문 confidence — 둘 다 성립할 때만. 큰 글씨는 conf가 낮아도 통과.
+      2. 목표 언어 스크립트 비율 — 한국어 목표인데 번역문에 한글이 거의 없다 = 번역이 실패했다.
+      3. 길이 붕괴 — 긴 원문이 초단문으로 뭉개진 경우(모델이 입력을 버린 것).
+      4. 미번역 잔류(CO-1) — 허용치는 번역문 길이에 비례한다(CO-2).
+    """
+    if not DISPLAY_GATE_ENABLED:
+        return None
+    tgt = (tgt_text or "").strip()
+    src = (src_text or "").strip()
+    if not tgt:
+        return "empty"
+
+    # 1) 극소 라인 + 저 confidence. 확대 재OCR(OU-1)로도 못 살린 영역이 여기 걸린다.
+    if (line_px is not None and 0 < line_px < DISPLAY_TINY_LINE_PX
+            and conf is not None and 0 <= conf < DISPLAY_TINY_LINE_MIN_CONF):
+        return f"tiny-line({int(line_px)}px)/low-conf({conf:.0f})"
+
+    # 2) 번역문이 목표 언어 스크립트를 거의 안 담고 있으면 번역 자체가 안 일어난 것.
+    wanted = _LANG_TO_SCRIPTS.get(tgt_lang)
+    if wanted:
+        scripts = [s for s in (_unicode_script(ch) for ch in tgt) if s != "COMMON"]
+        if not scripts:
+            return "no-letters"
+        hit = sum(1 for s in scripts if s in wanted)
+        if hit / len(scripts) < DISPLAY_MIN_TGT_SCRIPT_RATIO:
+            return f"tgt-script({hit}/{len(scripts)})"
+
+    # 3) 원문과 무관한 초단문(길이 붕괴).
+    if (len(src) >= DISPLAY_LEN_COLLAPSE_MIN_SRC
+            and len(tgt) < len(src) * DISPLAY_LEN_COLLAPSE_RATIO):
+        return f"len-collapse({len(tgt)}/{len(src)})"
+
+    # 4) CO-1: 번역문에 라틴 단어가 그대로 남아 있으면 절반만 번역된 것.
+    #    CO-2: 허용치는 번역문 길이에 비례한다 — 문단 하나에 오독 단어 하나가 섞였다고
+    #    멀쩡한 40단어를 통째로 숨기면 그건 게이트의 실패다.
+    if wanted and "LATIN" not in wanted:
+        left = carryover_words(tgt)
+        if left and len(left) > carryover_allowance(tgt):
+            return f"carryover({','.join(left[:3])})"
+    return None
+
+
+def carryover_allowance(tgt_text):
+    """CO-2: 이 번역문에서 눈감아 줄 미번역 라틴 단어 수."""
+    units = len(str(tgt_text or "").split())
+    return max(DISPLAY_MAX_CARRYOVER_WORDS, int(units * DISPLAY_CARRYOVER_MAX_RATIO))
+
+
+def carryover_words(text):
+    """번역문에 남은 **소문자** 라틴 단어들. 고유명사(대문자 시작)는 세지 않는다.
+
+    "Pudding", "HP" 처럼 대문자로 시작하거나 전부 대문자인 토큰은 번역문에 남는 게
+    정상이다. 남으면 안 되는 건 'dealing', 'speed', 'nesative' 같은 보통명사/동사다.
+    """
+    # 토큰 단위로 자르면 안 된다 — 번역문에서는 'sive를'처럼 한글 조사가 바로 붙는다.
+    # (한글도 isalpha()가 True라 "영문만 남기기"를 문자 검사로 하면 통째로 새어나간다.)
+    return [w for w in re.findall(r"[A-Za-z]+", str(text or ""))
+            if len(w) >= DISPLAY_CARRYOVER_MIN_LEN and w.islower()]
+
+
+# --- SE-1: 문장 단위 분할 ------------------------------------------------------
+# opus-mt / m2m100 은 **문장 쌍**으로 학습된 모델이다. PM-1 문단 병합으로 5줄짜리
+# 문단을 통째로 넘겼더니 앞 문장 전체를 빠뜨린 번역이 나왔다(실측 2026-08-05):
+#   원문   "When World War II broke out, Saint-Exupéry rejoined the French Air Force.
+#            After Nazi troops overtook France in 1940, ... fled to the United States. ..."
+#   번역   "1940년에 나치 군대가 프랑스를 점령한 후, 생텍쥐페리는 미국으로 도망쳤습니다..."
+#          ← 첫 문장이 통째로 증발
+# 길이 잘림이 아니라 모델이 긴 입력을 감당 못 하는 것이라, 출력 토큰을 늘려도 안 낫는다.
+# → 문단은 문단대로 합치되(박스 하나), 모델에는 **문장 단위**로 넣고 결과를 다시 잇는다.
+_SENTENCE_END = re.compile(r"(?<=[.!?。！？])\s+")
+SENTENCE_SPLIT_MAX_CHARS = 200    # 종결부호가 없는 긴 덩어리는 이 길이에서 강제로 끊는다
+
+
+def split_sentences(text, max_chars=SENTENCE_SPLIT_MAX_CHARS):
+    out = []
+    for part in _SENTENCE_END.split(str(text or "").strip()):
+        while len(part) > max_chars:
+            cut = part.rfind(" ", 0, max_chars)
+            if cut <= 0:
+                cut = max_chars          # 공백 없는 덩어리(CJK 등)는 그냥 자른다
+            out.append(part[:cut].strip())
+            part = part[cut:].lstrip()
+        if part.strip():
+            out.append(part.strip())
+    return out or [str(text or "")]
+
+
+def _cache_key_text(text: str) -> str:
+    """RT-1: 캐시 키용 보수적 정규화 — 연속 공백 collapse + 양끝 strip.
+
+    OCR은 같은 정적 화면도 프레임마다 공백/줄바꿈이 미세하게 흔들려 원문 그대로를 키로 쓰면
+    캐시가 계속 miss → 1~3초마다 수십 줄 재번역. 표시용 원문/번역문은 원본을 그대로 쓴다.
+    (문자 자체를 건드리는 정규화는 다른 언어를 망칠 수 있어 하지 않는다.)
+    """
+    return " ".join(str(text).split())
+
+
+# TE-1: 직전 batch_translate 에서 실패한 언어 그룹 메시지. 워커 스레드 한 곳에서만
+# 쓰기 때문에 락이 필요 없다(호출부: cocktail_engine 의 OCR 루프/UIA 루프).
+LAST_GROUP_ERRORS = []
+
+
+def batch_translate(texts, src_lang_hint, tgt_lang):
+    """
+    여러 라인을 한 번의 generate 호출로 번역.
+    src_lang_hint: 'auto', ISO 639-1, 또는 라인별 ISO list.
+    tgt_lang: ISO 639-1.
+    동일 src끼리 묶어 모델별로 1회 호출. 한 그룹이 실패해도 나머지 그룹은 살아남고,
+    실패는 LAST_GROUP_ERRORS 에 남는다 (TE-1).
+    """
+    LAST_GROUP_ERRORS.clear()
+    if not texts:
+        return []
+
+    results = [None] * len(texts)
+    pending_idx = []
+    pending_texts = []
+    pending_keys = []   # RT-1: 캐시 저장용 정규화 텍스트 (모델 입력은 pending_texts 원본)
+    pending_src = []
+
+    src_list = src_lang_hint if isinstance(src_lang_hint, list) else None
+
+    for i, t in enumerate(texts):
+        if src_list is not None:
+            src = src_list[i] if i < len(src_list) else "en"
+        else:
+            src = src_lang_hint if src_lang_hint != "auto" else identify_language(t)
+        if src == tgt_lang:
+            # SK-1: 번역할 게 없는 줄(원문 언어 == 목표 언어)은 **그리지 않는다**.
+            # 예전엔 원문을 그대로 돌려줘서, 목표=한국어인 상태로 한국어가 섞인 화면을 보면
+            # 한글 줄마다 "같은 글자가 적힌 검은 박스"가 덮였다. None은 호출부의
+            # `if not (tgt_text and tgt_text.strip())` 가드에서 자동으로 걸러진다.
+            results[i] = None
+            continue
+        # RT-1: 캐시 키는 정규화 텍스트. OCR 공백 흔들림이 캐시 miss를 만들지 않게.
+        norm = _cache_key_text(t)
+        key = (src, tgt_lang, norm)
+        with CACHE_LOCK:
+            cached = TRANS_CACHE.get_or_none(key)
+        if cached is None:
+            # Phase 4: 영구 캐시(DPAPI 암호화)에서도 조회. 메모리 캐시로 승격.
+            try:
+                disk = PERSIST_CACHE.get(src, tgt_lang, norm)
+            except Exception:
+                disk = None
+            if disk is not None:
+                cached = disk
+                with CACHE_LOCK:
+                    TRANS_CACHE.put(key, disk)
+        if cached is not None:
+            results[i] = cached
+            continue
+        pending_idx.append(i)
+        pending_texts.append(t)
+        pending_keys.append(norm)
+        pending_src.append(src)
+
+    if not pending_idx:
+        return results
+
+    groups = {}
+    for j, src in enumerate(pending_src):
+        groups.setdefault(src, []).append(j)
+
+    for src, js in groups.items():
+        sub_texts = [pending_texts[j] for j in js]
+        # SE-1: 모델에는 문장 단위로 넣고, 결과를 원래 줄로 다시 잇는다.
+        pieces, owner = [], []
+        for k, text in enumerate(sub_texts):
+            for sentence in split_sentences(text):
+                pieces.append(sentence)
+                owner.append(k)
+        try:
+            translated_pieces = TRANSLATOR.translate_batch(pieces, src, tgt_lang)
+        except Exception as e:
+            # TE-1: 언어 그룹 격리. 예전엔 예외가 그대로 올라가 **프레임 전체**가 날아갔다
+            # (중국어 1줄의 모델 로드 실패로 영어 50줄이 같이 사라짐, 실측 2026-09-05).
+            # 이 그룹의 줄만 None으로 두고 나머지 그룹은 계속 번역한다.
+            msg = f"{src}→{tgt_lang} {len(js)}줄 실패: {type(e).__name__}: {e}"
+            print(f"[WARN] 번역 그룹 {msg}")
+            LAST_GROUP_ERRORS.append(msg)   # CO-2: 무음 실패 금지 — 호출부가 상태줄에 띄운다
+            continue
+        joined = [[] for _ in sub_texts]
+        for piece_out, k in zip(translated_pieces, owner):
+            if piece_out and piece_out.strip():
+                joined[k].append(piece_out.strip())
+        decoded = [" ".join(parts) for parts in joined]
+        for local, j in enumerate(js):
+            tgt_text = decoded[local]
+            results[pending_idx[j]] = tgt_text
+            with CACHE_LOCK:
+                TRANS_CACHE.put((src, tgt_lang, pending_keys[j]), tgt_text)
+            # Phase 4: 영구 캐시도 갱신 (저장은 closeEvent/주기적으로)
+            try:
+                PERSIST_CACHE.put(src, tgt_lang, pending_keys[j], tgt_text)
+            except Exception:
+                pass
+
+    return results
+
+
+class PersistentCache:
+    """DPAPI 암호화된 영구 캐시. 키는 hash, 값은 번역 결과.
+    플랫폼 비-Windows 또는 DPAPI 실패 시 자동으로 무동작 (앱은 정상)."""
+
+    def __init__(self, path: str, max_entries: int = 4096):
+        self.path = path
+        self.max_entries = max_entries
+        self._mem = {}
+        self._dirty = False
+        self._enabled = sys.platform == "win32"
+        self._loaded = False
+        self._load_lock = threading.Lock()
+        self._mem_lock = threading.RLock()
+        # P-9 정신: 디스크 I/O는 import 시점에 X. 첫 get/put 또는 명시적 preload 시.
+
+    def preload_async(self):
+        """Phase 4: 백그라운드 스레드로 디스크 캐시 로드. UI 시작 안 막음."""
+        if self._loaded or not self._enabled:
+            return
+        threading.Thread(target=self._load, daemon=True).start()
+
+    @staticmethod
+    def _key(src: str, tgt: str, text: str) -> str:
+        import hashlib
+        return hashlib.sha256(f"{src}|{tgt}|{text}".encode("utf-8")).hexdigest()
+
+    def _load(self):
+        with self._load_lock:
+            if self._loaded:
+                return
+            self._loaded = True
+            if not self._enabled or not os.path.exists(self.path):
+                return
+            try:
+                with open(self.path, "rb") as f:
+                    blob = f.read()
+                if not blob:
+                    return
+                decrypted = dpapi_unprotect(blob)
+                if decrypted is None:
+                    print("[WARN] PersistentCache 복호화 실패 — 새 캐시로 시작")
+                    return
+                import json
+                loaded = json.loads(decrypted.decode("utf-8"))
+                with self._mem_lock:
+                    self._mem = loaded
+                print(f"[INFO] PersistentCache 로드: {len(loaded)} 항목")
+            except Exception as e:
+                print(f"[WARN] PersistentCache 로드 실패: {e}")
+                with self._mem_lock:
+                    self._mem = {}
+
+    def save(self):
+        try:
+            import json
+            with self._mem_lock:
+                if not self._enabled or not self._dirty:
+                    return
+                snapshot = dict(self._mem)
+            data = json.dumps(snapshot, ensure_ascii=False).encode("utf-8")
+            blob = dpapi_protect(data)
+            if not blob:
+                return
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(blob)
+            os.replace(tmp, self.path)
+            with self._mem_lock:
+                # 저장 중 새 put이 들어왔으면 dirty를 보존한다.
+                if snapshot == self._mem:
+                    self._dirty = False
+        except Exception as e:
+            print(f"[WARN] PersistentCache 저장 실패: {e}")
+
+    def get(self, src: str, tgt: str, text: str):
+        if not self._enabled:
+            return None
+        if not self._loaded:
+            self._load()  # 동기 로드 (이미 preload_async가 마쳐있을 가능성 큼)
+        with self._mem_lock:
+            return self._mem.get(self._key(src, tgt, text))
+
+    def put(self, src: str, tgt: str, text: str, translation: str):
+        if not self._enabled:
+            return
+        if not self._loaded:
+            self._load()
+        with self._mem_lock:
+            if len(self._mem) >= self.max_entries:
+                # 단순 절반 비우기 (LRU는 메모리 LRU에 위임)
+                keys = list(self._mem.keys())
+                for k in keys[: len(keys) // 2]:
+                    self._mem.pop(k, None)
+            self._mem[self._key(src, tgt, text)] = translation
+            self._dirty = True
+
+
+# 사용자 폴더에 캐시 — 평문 출처 미저장
+_PERSIST_CACHE_PATH = os.path.join(
+    os.path.expanduser("~"), ".cocktail", "translation_cache.bin"
+)
+PERSIST_CACHE = PersistentCache(_PERSIST_CACHE_PATH)
+# UI가 뜬 직후 백그라운드로 로드 (BackgroundController.start에서 호출)

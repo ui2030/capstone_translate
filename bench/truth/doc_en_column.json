@@ -1,0 +1,18 @@
+{
+  "name": "doc_en_column",
+  "paragraphs": [
+    "Chapter Four: The Lamplighter's Hour",
+    "collected notes, page 41",
+    "The road out of the village climbed slowly for two miles and then gave up climbing altogether. Travellers who had expected a view were disappointed, and travellers who had expected nothing were pleased, which is the usual arrangement in that part of the country.",
+    "He carried a short ladder and a can of oil, and he never spoke to anyone before the lamp was lit.",
+    "Afterwards he would sit on the top step and watch the road, waiting for the hour when the light was no longer needed and he could put it out again.",
+    "Figure 4. the lamp on the hill road",
+    "Nobody in the village could remember when the lamp had first been lit, and nobody thought to ask. It was simply part of the hill, like the wall and the two crooked pines beside it."
+  ],
+  "forbidden": [],
+  "lang": "en",
+  "font_px": 16,
+  "expect_display": true,
+  "role": "criterion1,2,3",
+  "notes": "삽화(도형) 왼쪽 + 좁은 단 오른쪽. 문단 병합이 깨졌던 배치 재현."
+}

@@ -1,0 +1,12 @@
+{
+  "name": "screen_14",
+  "paragraphs": [
+    "The kettle on the far shelf had been whistling for a while before anyone noticed it. Marta lifted it off the heat and poured two cups without asking. Outside the rain had finally stopped and the street lamps were coming on one by one along the wet road."
+  ],
+  "forbidden": [],
+  "lang": "en",
+  "font_px": 14,
+  "expect_display": true,
+  "role": "criterion1",
+  "notes": "같은 문장을 실제 화면(ClearType)에 14px로 띄워 ImageGrab 캡처."
+}

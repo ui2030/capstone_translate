@@ -1,0 +1,26 @@
+{
+  "name": "multi_context",
+  "paragraphs": [
+    "Harbour repairs begin next month",
+    "Saved searches",
+    "Weather station logs",
+    "Ferry timetable archive",
+    "The council approved the plan on Tuesday after a short debate. Work on the outer wall will start once the fishing season ends, and the ferry timetable will change for six weeks.",
+    "Harbour wall photographs",
+    "Council meeting minutes",
+    "Tide tables for August",
+    "Team chat",
+    "Storage almost full",
+    "Did the parts arrive this morning?",
+    "You have used 94 percent of the space on this device. Older backups will be removed automatically unless you change the setting.",
+    "Only the small ones, the rest ship on Friday.",
+    "Open the storage page to choose which folders keep their history.",
+    "Fine, I will move the inspection to next week."
+  ],
+  "forbidden": [],
+  "lang": "en",
+  "font_px": 15,
+  "expect_display": true,
+  "role": "criterion3",
+  "notes": "무관한 덩어리 4구획(기사/저장검색/채팅/알림) 12문단. 채팅 3발화와 사이드바 5항목이 병합 함정."
+}

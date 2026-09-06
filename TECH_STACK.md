@@ -29,7 +29,11 @@
 오판(영어 PDF → Arabic conf 3.95)이 잦아 SL-1에서 함께 퇴역했다. 지금 남은 레이어:
 1. UIA 자동 라우팅 — 활성 창 + 기본 ocr_combo → UIA 우선 (OCR 불필요)
 2. 화면 가시 영역 클립 — 가상 데스크톱 geometry intersect
-3. auto OCR 언어 = `eng+kor` 고정 (`OCR_LANGS_AUTO_DEFAULT`) — 판별 비용 0
+3. auto OCR 언어 = `eng+kor` 기본 (`OCR_LANGS_AUTO_DEFAULT`) — 판별 비용 0
+4. ZH-1 조건부 `chi_sim` 재OCR — 병음 줄이 잡히거나 1차 패스가 0줄이면 `chi_sim`을 덧붙여
+   다시 읽고 8프레임 유지. `kor`은 한자를 **안** 읽는다(실측). 상시 추가는 영어 화면
+   OCR을 +38% 느리게 해서 조건부로 뒀다.
+5. PY-1 병음 줄 제외 — 한자 위 발음표기는 번역 입력에서 뺀다(영어 본문 거짓양성 0.09%)
 
 `COCKTAIL_OCR_LANGS_AUTO` 환경변수로 사용자 오버라이드 가능 (예: `eng+kor+jpn`).
 `osd.traineddata`는 더 이상 쓰지 않는다. 인스톨러 동봉 목록과 `download_tessdata.py`에서도
@@ -89,7 +93,7 @@
 
 ## 라이선스 정책 (상용 호환만)
 
-- ✅ PySide6 (LGPL), opus-mt (Apache 2.0), m2m100 (MIT), Tesseract (Apache 2.0), tessdata (Apache 2.0), PaddleOCR (Apache 2.0 계열)
+- ✅ PySide6 (LGPL), opus-mt (CC-BY-4.0 · 출처 표시 필요), m2m100 (MIT), Tesseract (Apache 2.0), tessdata (Apache 2.0), PaddleOCR (Apache 2.0 계열)
 - ❌ NLLB (CC-BY-NC), PyQt5 (GPL), 비상용 라이선스 모델
 
 상세: `COMMERCIAL_SOTA_REVIEW.md`, `BUILD.md` 라이선스 체크리스트, `VISION_AND_ROADMAP.md` §4 차별 포인트.

@@ -1,0 +1,142 @@
+name: Build & Release Cocktail (Windows)
+
+# 사용법:
+#   v1.0.0 같은 태그 push → 자동으로 PyInstaller 빌드 후 GitHub Release 생성.
+#   git tag v1.0.0 && git push origin v1.0.0
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:  # 수동 실행도 허용
+
+permissions:
+  contents: write   # 릴리즈 생성 권한
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+      COCKTAIL_BUNDLE_PADDLE: "0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+        shell: pwsh
+
+      - name: Install Tesseract OCR
+        run: |
+          choco install tesseract --no-progress -y
+          $candidates = @(
+            "C:\Program Files\Tesseract-OCR\tesseract.exe",
+            "C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
+          )
+          foreach ($candidate in $candidates) {
+            if (Test-Path $candidate) {
+              "TESSERACT_CMD=$candidate" | Out-File -FilePath $env:GITHUB_ENV -Append
+              break
+            }
+          }
+        shell: pwsh
+
+      - name: Pre-release checks
+        run: |
+          python diagnose_environment.py
+          python test_cocktail.py
+          python pre_release_check.py
+        shell: pwsh
+
+      - name: Download tessdata (eng + kor)
+        run: |
+          python download_tessdata.py
+        shell: pwsh
+
+      - name: Build with PyInstaller
+        run: |
+          python -m PyInstaller --noconfirm build.spec
+        shell: pwsh
+
+      - name: Packaged self-test
+        run: |
+          dist\Cocktail\Cocktail.exe --self-test
+        shell: pwsh
+
+      # ⚠ 코드 서명: secrets.WINDOWS_CERT_BASE64 / WINDOWS_CERT_PASSWORD 등록 필요.
+      # CODE_SIGNING.md 참고. 인증서 없으면 이 step은 자동 skip.
+      - name: Sign EXE (optional)
+        if: ${{ env.WINDOWS_CERT_BASE64 != '' && env.WINDOWS_CERT_PASSWORD != '' }}
+        run: |
+          [System.IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64))
+          $signtool = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe"
+          if (-not (Test-Path $signtool)) { $signtool = "signtool.exe" }
+          & $signtool sign /f cert.pfx /p $env:WINDOWS_CERT_PASSWORD `
+            /tr http://timestamp.sectigo.com /td sha256 /fd sha256 `
+            "dist\Cocktail\Cocktail.exe"
+          Remove-Item cert.pfx -Force
+        shell: pwsh
+
+      - name: Install Inno Setup
+        run: |
+          choco install innosetup --no-progress -y
+        shell: pwsh
+
+      - name: Build installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "ISCC.exe" }
+          & $iscc installer.iss
+        shell: pwsh
+
+      - name: Zip artifacts
+        run: |
+          Compress-Archive -Path "dist\Cocktail\*" -DestinationPath "Cocktail-${{ github.ref_name }}-windows.zip"
+        shell: pwsh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cocktail-windows
+          path: |
+            Cocktail-*.zip
+            Output\Cocktail-Setup-*.exe
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Cocktail ${{ github.ref_name }}"
+          body: |
+            ## Cocktail Translator ${{ github.ref_name }}
+
+            **컴퓨터를 모국어로 보는 가장 짧은 길.** 인식·번역 전 과정 로컬 처리 — 화면 내용은 외부로 나가지 않습니다.
+
+            ### 다운로드
+            - `Cocktail-${{ github.ref_name }}-windows.zip` — 압축 해제 후 `Cocktail.exe` 실행
+            - `Cocktail-Setup-*.exe` — Windows 인스톨러
+
+            ### 시스템 요구사항
+            - Windows 10 build 2004+ / Windows 11 (x64)
+            - Tesseract OCR 엔진 (별도 설치): https://github.com/UB-Mannheim/tesseract/wiki
+            - 최초 1회 실행 시 번역 모델 다운로드(인터넷 필요, 약 1~2GB). 이후에는 오프라인 동작.
+
+            ### 변경 내역
+            See `UPDATE_LOG.md`.
+          files: |
+            Cocktail-*.zip
+            Output/Cocktail-Setup-*.exe
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}

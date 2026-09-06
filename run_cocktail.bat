@@ -44,15 +44,13 @@ if errorlevel 1 (
     echo.
 )
 
-rem Entrypoint filename contains non-ASCII characters, so match it by pattern.
-for %%F in (Cocktail*.py) do (
-    set APP_FILE=%%F
-    goto :run
+rem Entrypoint is plain ASCII now (was Cocktail<hangul>.py, matched by glob).
+set APP_FILE=cocktail.py
+if not exist "%APP_FILE%" (
+    echo [ERROR] Cocktail Python entrypoint was not found: %APP_FILE%
+    pause
+    exit /b 1
 )
-
-echo [ERROR] Cocktail Python entrypoint was not found.
-pause
-exit /b 1
 
 :run
 echo [Cocktail] Starting %APP_FILE%

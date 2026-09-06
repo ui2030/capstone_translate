@@ -1,0 +1,59 @@
+# === 빌드 산출물 (PyInstaller / Inno Setup) — 매번 재생성되므로 커밋 금지 ===
+build/
+dist/
+Output/
+*.exe
+Cocktail-Setup-*.exe
+Cocktail-*.zip
+
+# === 모델 가중치 / 대용량 바이너리 ===
+# 라이선스 사고 방지: 모델 파일은 어떤 것도 저장소에 넣지 않는다.
+# nllb_ct2/ 는 CC-BY-NC(비상용) 모델이라 2026-08-03 삭제됨 — 절대 재추가 금지.
+nllb_ct2/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+tessdata/*.traineddata
+
+# === 캐시 ===
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+*.cache
+translation_cache.bin
+
+# === 가상환경 ===
+venv/
+.venv/
+env/
+.env
+
+# === IDE / OS ===
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# === 개발 PC 전용 실행기 (로컬 경로가 박혀 있어 공개 저장소엔 의미 없음) ===
+start_claude.bat
+debug_run.bat
+.claudeignore
+
+# === 로그 / 임시 ===
+*.log
+debug_log.txt
+*.tmp
+*.bak
+*.orig
+
+# === 채점판 실행 산출물 (시료/정답은 커밋, 결과는 커밋 금지) ===
+bench/last_score.json
+bench/last_samples.md
+bench/last_ui/

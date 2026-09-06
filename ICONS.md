@@ -48,7 +48,7 @@ python -c "from PIL import Image; Image.open('assets/installer-164x314.png').con
 
 ### 메인 윈도우 아이콘 (코드)
 ```python
-# Cocktail완성본.py — TransparentWindow.__init__
+# cocktail_ui.py — SettingsWindow.__init__
 icon_path = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "assets", "icon.ico")
 if os.path.exists(icon_path):
     self.setWindowIcon(QIcon(icon_path))
