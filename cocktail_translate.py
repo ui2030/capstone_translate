@@ -22,6 +22,27 @@ from cocktail_platform import dpapi_protect, dpapi_unprotect
 # 3은 한국어 정상 문장(어미·조사 반복)에도 걸릴 수 있어 4를 기본으로 둔다.
 NO_REPEAT_NGRAM_SIZE = 4          # ↓3이면 더 강하게 억제(정상 문장 왜곡 위험), ↑5면 관대
 
+# --- RP-2 튜닝 레버: 붕괴한 조각만 빔 서치로 다시 뽑기 ------------------------
+# RP-1(no_repeat_ngram)은 **무한 반복**만 막는다. 변주를 섞은 반복은 그대로 통과한다:
+#     "The kettle on the far shelf had been whistling for a while before anyone noticed it."
+#   → "그 때, 그 때, 한 때의 그 시절, 그 시절, 그때의 그 시절을 떠올리는 사람이 있었다."
+#   (OCR CER 0.00% = 원문은 완벽했다. greedy 디코딩이 혼자 무너진 것이다.)
+# 실측(2026-09-07, 영어 1,940문장 · en→ko):
+#   - 원인은 **greedy**다. 같은 문장을 `num_beams=4`로 뽑으면 정상 번역이 나온다.
+#     `no_repeat_ngram_size=0`으로 두면 오히려 "그 때," 무한 루프가 되므로 RP-1은 유지한다.
+#     한 글자만 달라도(`for a while`→`for 2 while`) 붕괴가 사라진다 = 입력 특성이 아니라 탐색 실패.
+#   - 빈도 8/1940 = **0.41%**. OCR 오독을 주입한 600문장에서는 0/600 — 붕괴는
+#     "쓰레기 입력" 현상이 **아니라** 깨끗한 입력에서 나는 탐색 실패다.
+#   - 전면 `num_beams=4`는 배치 12문장 p50 311ms → 553ms(**+78%**)라 기준 4를 깬다
+#     (현재 p50 1.46s / 한도 1.5s). 그래서 **붕괴 징후가 있는 조각만** 다시 뽑는다.
+# 판정값: 글자만 남긴 문자 3-gram 중복률의 "원문 대비 초과분"(`repetition_excess`).
+#   원문 자신이 반복이면(`----------`, `:py:data:` 나열) 번역문도 반복이라 그건 빼야 한다.
+#   실측 분포: 정상 p99 = +0.064, 붕괴 = +0.10 ~ +0.33.
+RETRY_REPETITION_EXCESS = 0.10    # ↓면 더 많이 재시도(느려짐), ↑면 붕괴를 놓친다
+RETRY_NUM_BEAMS = 4               # 재시도 빔 수. 실측에서 4가 관측된 붕괴를 전부 고쳤다
+RETRY_MAX_PIECES = 8              # 한 프레임에서 재시도할 조각 수 상한(최악 지연 방어).
+                                  # 실측 발생률 0.4%라 8이면 사실상 항상 충분하다.
+
 
 # --- DG-1 튜닝 레버: 표시 직전 최종 게이트 (7차) ------------------------------
 # 원칙: "확신 없으면 숨긴다". 깨진 자막을 보여주는 것보다 안 보여주는 게 낫다.
@@ -156,7 +177,7 @@ def _load_local_first(loader, model_name, **kwargs):
 
 class _BaseTranslator:
     name = "base"
-    def translate_batch(self, texts, src, tgt):
+    def translate_batch(self, texts, src, tgt, num_beams=1):
         raise NotImplementedError
 
 
@@ -226,7 +247,7 @@ class OpusMtTranslator(_BaseTranslator):
                 [[1] * len(s) + [0] * (n - len(s)) for s in seqs], dtype=torch.long).to(device),
         }
 
-    def translate_batch(self, texts, src, tgt):
+    def translate_batch(self, texts, src, tgt, num_beams=1):
         # opus-mt는 언어쌍 전용이라 src/tgt는 라우팅 검증용으로만 사용 (모델은 이미 결정됨)
         if self.src_sp is not None:
             enc = self._encode_with_spm(texts)  # M-8
@@ -240,9 +261,9 @@ class OpusMtTranslator(_BaseTranslator):
             out = self.model.generate(
                 **enc,
                 max_new_tokens=max_new,
-                num_beams=1,
+                num_beams=num_beams,           # RP-2: 붕괴 조각 재시도만 >1
                 do_sample=False,
-                early_stopping=False,
+                early_stopping=num_beams > 1,
                 no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,  # RP-1
             )
         return self.tok.batch_decode(out, skip_special_tokens=True)
@@ -278,7 +299,7 @@ class M2M100Translator(_BaseTranslator):
         except Exception as e:
             print(f"[WARN] m2m100 워밍업 실패: {e}")
 
-    def translate_batch(self, texts, src, tgt):
+    def translate_batch(self, texts, src, tgt, num_beams=1):
         # src/tgt = ISO 639-1 ("en", "ko", "fr", ...)
         self.tok.src_lang = src
         enc = self.tok(
@@ -291,9 +312,9 @@ class M2M100Translator(_BaseTranslator):
                 **enc,
                 forced_bos_token_id=self.tok.get_lang_id(tgt),
                 max_new_tokens=max_new,
-                num_beams=1,
+                num_beams=num_beams,           # RP-2
                 do_sample=False,
-                early_stopping=False,
+                early_stopping=num_beams > 1,
                 no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,  # RP-1
             )
         return self.tok.batch_decode(out, skip_special_tokens=True)
@@ -403,10 +424,10 @@ class HybridTranslator:
         self._ensure_bilingual("en", "ko", progress_cb=progress_cb)
         if progress_cb: progress_cb("준비 완료")
 
-    def translate_batch(self, texts, src, tgt):
+    def translate_batch(self, texts, src, tgt, num_beams=1):
         direct = self._ensure_bilingual(src, tgt)
         if direct is not None:
-            return direct.translate_batch(texts, src, tgt)
+            return direct.translate_batch(texts, src, tgt, num_beams)
         # M-9: 전용 모델이 없으면 중간 언어 경유를 먼저 시도한다(m2m100 폴백보다 낫다).
         # 두 다리 다 준비돼 있을 때만 — 아직 로딩 중이면 이번 프레임은 폴백이 처리한다.
         mid = self.PIVOT_ROUTES.get((src, tgt))
@@ -415,11 +436,11 @@ class HybridTranslator:
             second = self._ensure_bilingual(mid, tgt, block=False)
             if first is not None and second is not None:
                 return second.translate_batch(
-                    first.translate_batch(texts, src, mid), mid, tgt)
+                    first.translate_batch(texts, src, mid, num_beams), mid, tgt, num_beams)
         fallback = self._ensure_multilingual(block=False)
         if fallback is None:
             raise RuntimeError("m2m100 폴백 모델 로드 중")   # TE-1: 이 그룹만 이번 프레임 포기
-        return fallback.translate_batch(texts, src, tgt)
+        return fallback.translate_batch(texts, src, tgt, num_beams)
 
 
 # 가벼운 인스턴스만 만들기 (모델은 아직 로드 안 됨, P-9)
@@ -653,11 +674,56 @@ def carryover_words(text):
 
     "Pudding", "HP" 처럼 대문자로 시작하거나 전부 대문자인 토큰은 번역문에 남는 게
     정상이다. 남으면 안 되는 건 'dealing', 'speed', 'nesative' 같은 보통명사/동사다.
+
+    CO-3(2026-09-07): 숫자가 **끝에 붙은** 라틴 조각은 단어가 아니라 식별자다
+    (`user1`, `mp3`, `3D`, `PyQt5`). `[A-Za-z]+` 로 자르면 `user1:` 이 `user` 로 잡혀
+    미번역 잔류로 오인된다 — 실측에서 채팅 12줄 중 **11줄**이 `carryover(user)` 로 통째로
+    숨었다. 사용자가 지목한 주 용도(채팅)에서 게이트가 정상 번역을 92% 가린 것이라
+    CO-2와 같은 종류의 사고다.
+    반대로 숫자가 **글자 사이에** 있으면(`cre2ted`, `de5cription`, `applicati0n`) 그건
+    OCR 오독이 만든 깨진 단어이므로 지금까지처럼 잔류로 센다. 이 구분이 없으면
+    둘 중 하나를 반드시 잃는다.
+    ponytail: `utf8mb4` 처럼 숫자가 가운데 든 **진짜** 식별자는 잔류로 오인된다.
+              그런 화면이 잦으면 예외 목록이 아니라 `DISPLAY_MAX_CARRYOVER_WORDS` 를 올려라.
     """
     # 토큰 단위로 자르면 안 된다 — 번역문에서는 'sive를'처럼 한글 조사가 바로 붙는다.
     # (한글도 isalpha()가 True라 "영문만 남기기"를 문자 검사로 하면 통째로 새어나간다.)
-    return [w for w in re.findall(r"[A-Za-z]+", str(text or ""))
+    words = []
+    for tok in re.findall(r"[A-Za-z0-9]+", str(text or "")):
+        if tok.isalpha():
+            words.append(tok)
+        elif re.search(r"[A-Za-z][0-9]+[A-Za-z]", tok):   # 글자 사이 숫자 = 깨진 단어
+            words += re.findall(r"[A-Za-z]+", tok)
+    return [w for w in words
             if len(w) >= DISPLAY_CARRYOVER_MIN_LEN and w.islower()]
+
+
+# --- RP-2: 반복 붕괴 판정 -----------------------------------------------------
+def _char_ngram_repetition(text, n=3):
+    """글자만 남긴 뒤 문자 n-gram 중복 비율. 0 = 반복 없음, 1에 가까울수록 같은 말 반복.
+
+    단어 n-gram이 아니라 **문자** n-gram인 이유: 붕괴는 "그 때, 그 때, 한 때의 그 시절,
+    그 시절"처럼 조사·어미를 바꿔 가며 반복하는 형태라 단어 단위로는 중복이 안 잡힌다.
+    """
+    seq = "".join(c for c in str(text or "") if c.isalpha()).lower()
+    # 짧은 문자열의 n-gram 통계는 잡음이다. 하한을 5로 잡은 것은 실측이다:
+    # 7이면 짧은 라벨을 통째로 면제해 `"Council meeting minutes" → "회의록 회의록"`
+    # 같은 중복을 못 본다. 5로 내리면 그게 잡히고(초과 +0.250), 2,129건에서 새 거짓양성은
+    # **0건**이다(p99 +0.062 불변). 4 이하로는 더 잡히는 것이 없다.
+    if len(seq) < n + 2:
+        return 0.0
+    grams = [seq[i:i + n] for i in range(len(seq) - n + 1)]
+    return 1 - len(set(grams)) / len(grams)
+
+
+def repetition_excess(src_text, tgt_text):
+    """번역문의 반복률에서 **원문 자신의 반복률**을 뺀 값 (RP-2 판정값).
+
+    원문이 이미 반복이면(`--------`, `:py:data:` 나열, "a factor of 1.0 ... a factor of 2.0")
+    정상 번역도 반복이라 절대값으로는 못 가른다. 실측 분포(영어 1,940문장 en→ko, greedy):
+    정상 p50 -0.027 / p90 0.000 / p99 +0.064 · 붕괴 +0.10 ~ +0.33.
+    """
+    return _char_ngram_repetition(tgt_text) - _char_ngram_repetition(src_text)
 
 
 # --- SE-1: 문장 단위 분할 ------------------------------------------------------
@@ -700,6 +766,30 @@ def _cache_key_text(text: str) -> str:
 # TE-1: 직전 batch_translate 에서 실패한 언어 그룹 메시지. 워커 스레드 한 곳에서만
 # 쓰기 때문에 락이 필요 없다(호출부: cocktail_engine 의 OCR 루프/UIA 루프).
 LAST_GROUP_ERRORS = []
+
+
+def _retry_collapsed(pieces, outs, src, tgt):
+    """RP-2: 반복 붕괴한 조각만 빔 서치로 다시 뽑아 `outs` 를 제자리 수정한다.
+
+    바꿔치기는 **더 나아졌을 때만** 한다 — 재시도가 더 반복적이면 원래 것을 남긴다.
+    실패해도 조용히 원본을 쓴다(번역이 통째로 사라지는 것보다 낫다 — TE-1과 같은 정신).
+    """
+    bad = [i for i, (p, o) in enumerate(zip(pieces, outs))
+           if repetition_excess(p, o) >= RETRY_REPETITION_EXCESS]
+    if not bad:
+        return
+    bad = bad[:RETRY_MAX_PIECES]
+    try:
+        again = TRANSLATOR.translate_batch([pieces[i] for i in bad], src, tgt,
+                                           num_beams=RETRY_NUM_BEAMS)
+    except Exception as e:
+        print(f"[WARN] RP-2 재시도 실패({len(bad)}조각), greedy 결과 유지: "
+              f"{type(e).__name__}: {e}")
+        return
+    for i, alt in zip(bad, again):
+        if repetition_excess(pieces[i], alt) < repetition_excess(pieces[i], outs[i]):
+            print(f'[INFO] RP-2 반복 붕괴 재번역: "{_cache_key_text(pieces[i])[:60]}"')
+            outs[i] = alt
 
 
 def batch_translate(texts, src_lang_hint, tgt_lang):
@@ -782,6 +872,7 @@ def batch_translate(texts, src_lang_hint, tgt_lang):
             print(f"[WARN] 번역 그룹 {msg}")
             LAST_GROUP_ERRORS.append(msg)   # CO-2: 무음 실패 금지 — 호출부가 상태줄에 띄운다
             continue
+        _retry_collapsed(pieces, translated_pieces, src, tgt_lang)
         joined = [[] for _ in sub_texts]
         for piece_out, k in zip(translated_pieces, owner):
             if piece_out and piece_out.strip():

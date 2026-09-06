@@ -220,7 +220,7 @@ def test_zh_ko_routes_through_pivot_not_m2m100_fallback():
 
     class FakeLeg:
         def __init__(self, tag): self.tag = tag
-        def translate_batch(self, texts, src, tgt):
+        def translate_batch(self, texts, src, tgt, num_beams=1):
             calls.append((src, tgt))
             return [f"{self.tag}:{t}" for t in texts]
 
@@ -238,7 +238,7 @@ def test_unregistered_pair_still_falls_back_to_m2m100():
     used = []
 
     class FakeM2M:
-        def translate_batch(self, texts, src, tgt):
+        def translate_batch(self, texts, src, tgt, num_beams=1):
             used.append((src, tgt))
             return list(texts)
 
@@ -256,7 +256,7 @@ def test_translation_group_failure_does_not_kill_other_groups():
     실패한 그룹의 줄만 None 이 되고, 실패 사실은 LAST_GROUP_ERRORS 에 남아야 한다.
     """
     class Boom:
-        def translate_batch(self, texts, src, tgt):
+        def translate_batch(self, texts, src, tgt, num_beams=1):
             if src == "ar":
                 raise RuntimeError("CUDA out of memory")
             return [f"번역:{t}" for t in texts]
@@ -279,7 +279,114 @@ def test_translation_group_failure_does_not_kill_other_groups():
         f"실패가 조용히 삼켜졌다(CO-2): {tr.LAST_GROUP_ERRORS}"
 
 
+# --- 반복 붕괴 재번역 (RP-2) --------------------------------------------------
+# 실측된 사고: OCR CER 0.00% 인 문장이
+#   "The kettle on the far shelf had been whistling for a while before anyone noticed it."
+#   → "그 때, 그 때, 한 때의 그 시절, 그 시절, 그때의 그 시절을 떠올리는 사람이 있었다."
+# 로 나왔다. greedy 디코딩의 탐색 실패이고, 같은 문장을 빔 서치로 뽑으면 정상이다.
+COLLAPSE_SAMPLE = ("그 때, 그 때, 한 때의 그 시절, 그 시절, "
+                   "그때의 그 시절을 떠올리는 사람이 있었다.")
+COLLAPSE_SRC = ("The kettle on the far shelf had been whistling for a while "
+                "before anyone noticed it.")
+GOOD_SAMPLE = "이윽고 찻잔은 누군가가 눈치 채기 전에 잠시 동안 휘파람을 불고 있었다."
+
+
+def test_repetition_collapse_is_detected():
+    """붕괴한 번역문은 초과 반복률로 검출되고, 정상 번역문은 검출되지 않는다."""
+    bad = tr.repetition_excess(COLLAPSE_SRC, COLLAPSE_SAMPLE)
+    good = tr.repetition_excess(COLLAPSE_SRC, GOOD_SAMPLE)
+    assert bad >= tr.RETRY_REPETITION_EXCESS, f"붕괴를 못 잡는다: {bad:+.3f}"
+    assert good < tr.RETRY_REPETITION_EXCESS, f"정상 번역을 붕괴로 오검출: {good:+.3f}"
+
+
+def test_normal_translations_are_not_flagged_as_collapse():
+    """오검출 가드. 원문 자신이 반복이면 번역문도 반복이라 그건 붕괴가 아니다."""
+    pairs = [
+        ("Your changes have been saved to the local drive.",
+         "변경 사항이 로컬 드라이브에 저장되었습니다."),
+        ("An enhancement factor of 0.0 gives a blurred image, a factor of 1.0 gives "
+         "the original image, and a factor of 2.0 gives a sharpened image.",
+         "0.0의 향상 계수는 흐린 이미지를 제공하고, 1.0의 계수는 원본 이미지를 제공하며, "
+         "2.0의 계수는 선명하게 된 이미지를 제공합니다."),
+        ("Storage almost full", "저장 공간이 거의 찼습니다"),
+        ("Measurements", "측정"),
+    ]
+    for src, tgt in pairs:
+        ex = tr.repetition_excess(src, tgt)
+        assert ex < tr.RETRY_REPETITION_EXCESS, f"정상 문장 오검출({ex:+.3f}): {tgt}"
+
+
+def test_collapsed_piece_is_retranslated_with_beams():
+    """붕괴한 조각만 빔 서치로 다시 뽑고, 더 나아졌을 때만 바꿔치기한다."""
+    seen = []
+
+    class FakeCollapse:
+        def translate_batch(self, texts, src, tgt, num_beams=1):
+            seen.append((tuple(texts), num_beams))
+            if num_beams == 1:
+                return [COLLAPSE_SAMPLE if t == COLLAPSE_SRC else "정상 번역입니다."
+                        for t in texts]
+            return [GOOD_SAMPLE for _ in texts]
+
+    class NoDisk:
+        def get(self, *a): return None
+        def put(self, *a): pass
+
+    real, real_disk = tr.TRANSLATOR, tr.PERSIST_CACHE
+    tr.TRANSLATOR, tr.PERSIST_CACHE = FakeCollapse(), NoDisk()
+    try:
+        with tr.CACHE_LOCK:
+            tr.TRANS_CACHE.clear()
+        out = tr.batch_translate([COLLAPSE_SRC, "A quiet street."], ["en", "en"], "ko")
+    finally:
+        tr.TRANSLATOR, tr.PERSIST_CACHE = real, real_disk
+    assert out[0] == GOOD_SAMPLE, f"붕괴가 그대로 표시된다: {out[0]}"
+    assert len(seen) == 2 and seen[1][1] == tr.RETRY_NUM_BEAMS, \
+        f"재시도가 빔 서치로 안 돌았다: {seen}"
+    assert seen[1][0] == (COLLAPSE_SRC,), f"붕괴 안 한 줄까지 재시도했다: {seen[1][0]}"
+
+
+def test_normal_batch_never_triggers_retry():
+    """정상 번역만 있는 프레임에서는 재시도가 아예 안 돈다(속도 회귀 가드)."""
+    beams = []
+
+    class FakeOk:
+        def translate_batch(self, texts, src, tgt, num_beams=1):
+            beams.append(num_beams)
+            return [f"{t} 의 정상적인 한국어 번역문입니다." for t in texts]
+
+    class NoDisk:
+        def get(self, *a): return None
+        def put(self, *a): pass
+
+    real, real_disk = tr.TRANSLATOR, tr.PERSIST_CACHE
+    tr.TRANSLATOR, tr.PERSIST_CACHE = FakeOk(), NoDisk()
+    try:
+        with tr.CACHE_LOCK:
+            tr.TRANS_CACHE.clear()
+        tr.batch_translate(["The ferry left the harbor at dawn.",
+                            "Nobody on board spoke for the first hour."],
+                           ["en", "en"], "ko")
+    finally:
+        tr.TRANSLATOR, tr.PERSIST_CACHE = real, real_disk
+    assert beams == [1], f"재시도가 헛돌았다: {beams}"
+
+
 # --- 표시 게이트 (DG-1) ------------------------------------------------------
+def test_carryover_ignores_identifiers_glued_to_digits():
+    """CO-3: `user1:` 같은 식별자는 미번역 잔류가 아니다 (채팅 11/12줄이 숨었던 사고).
+
+    반대로 글자 **사이에** 숫자가 낀 것(`cre2ted`)은 OCR 오독이라 계속 잡아야 한다.
+    """
+    assert tr.carryover_words("user1: 어제 로그 파일을 봤나요") == []
+    assert tr.carryover_words("mp3 파일을 여세요") == []
+    assert tr.carryover_words("PyQt5, PySide2 순서") == []
+    assert tr.carryover_words("파일은 cre2ted 될 수 있습니다"), "OCR 오독을 놓쳤다"
+    assert "dealing" in tr.carryover_words("4회씩 각 dealing 156 피해")
+    assert tr.display_gate_reject("user1: did anyone look at the log file",
+                                  "user1: 어제 로그 파일을 봤나요", "ko") is None
+
+
 def test_display_gate_hides_untranslated_output():
     # 목표가 한국어인데 번역문에 한글이 없다 = 번역이 안 일어났다.
     assert tr.display_gate_reject("Hello world", "Hello world", "ko") is not None

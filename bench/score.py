@@ -57,6 +57,21 @@ VRAM_FREE_MIN_MB = 3000
 # "이 OCR 문단은 정답 문장을 제대로 읽은 것"으로 인정할 유사도. 기준 2의 오탐률 분모.
 NORMAL_SIM = 0.80
 
+# --- 기준 2: 붕괴/누락 판정 임계 (2026-09-07 신설) ---------------------------
+# 예전 기준 2는 "치명적 오역"을 **미번역 잔류 / 목표언어 글자 비율 / 길이 붕괴** 셋으로만
+# 봤다. 그 셋은 실제로 일어난 사고를 하나도 못 잡았다 — CER 0.00% 인 문장이
+#   "The kettle on the far shelf had been whistling for a while before anyone noticed it."
+#   → "그 때, 그 때, 한 때의 그 시절, 그 시절, 그때의 그 시절을 떠올리는 사람이 있었다."
+# 로 나왔는데 한글 비율 1.0, 길이비 0.60, 미번역 0 이라 전부 통과했다.
+# 이제 두 가지를 **정확히** 센다(대리 지표가 아니다):
+#   - 반복 붕괴: 번역문의 초과 반복률(`tr.repetition_excess`). 실측 분포(영어 1,940문장,
+#     RP-2 재시도 후) 정상 p99 +0.055 / max +0.100 → 0.12 면 오검출 0/1940 이고
+#     실제 붕괴(+0.133, +0.333)는 잡는다.
+#   - 문장 누락: 원문이 2문장 이상인 줄을 **문장 단위로 다시 번역**해(모델이 실제로 받는
+#     단위가 그것이다 — SE-1) 빈 조각/극단적 축약 조각을 센다. 추측이 아니라 실행이다.
+COLLAPSE_EXCESS = 0.12
+DROP_PIECE_RATIO = 0.15   # 조각 번역 길이 / 조각 원문 길이. 이 아래면 그 문장은 사라진 것
+
 
 # --- 문자열 유틸 -------------------------------------------------------------
 def norm(s):
@@ -297,6 +312,38 @@ def best_truth(fx, text):
     return best, score
 
 
+def collapse_and_dropout(rows):
+    """표시된 줄에서 **반복 붕괴**와 **문장 누락**을 센다 (기준 2, 정확 측정).
+
+    누락은 원문을 `split_sentences` 로 쪼개 조각별로 실제 번역을 돌려 확인한다 —
+    `batch_translate` 가 모델에 넣는 단위가 바로 그 조각이라, 조각 하나가 빈 출력이면
+    그 문장은 자막에서 통째로 사라진 것이다. 조각이 하나뿐인 줄은 잴 게 없어 건너뛴다.
+    """
+    tr = app()["tr"]
+    collapsed = [{"src": r["src"], "tgt": r["tgt"],
+                  "excess": round(tr.repetition_excess(r["src"], r["tgt"]), 3)}
+                 for r in rows
+                 if tr.repetition_excess(r["src"], r["tgt"]) >= COLLAPSE_EXCESS]
+
+    multi = [r for r in rows if len(tr.split_sentences(r["src"])) >= 2]
+    pieces, owner = [], []
+    for r in multi:
+        for p in tr.split_sentences(r["src"]):
+            pieces.append(p)
+            owner.append(r)
+    dropped = []
+    if pieces:
+        try:
+            outs = tr.TRANSLATOR.translate_batch(pieces, "en", TGT_LANG)
+        except Exception as e:
+            return collapsed, [], f"문장 누락 측정 실패: {type(e).__name__}: {e}"
+        for piece, out, r in zip(pieces, outs, owner):
+            if len(norm(out)) < len(norm(piece)) * DROP_PIECE_RATIO:
+                dropped.append({"fixture_src": r["src"][:80], "sentence": piece,
+                                "piece_out": out})
+    return collapsed, dropped, None
+
+
 def criterion2(ctrl, results, samples_path):
     tr = app()["tr"]
     normal_total = normal_hidden = normal_lost = 0
@@ -390,16 +437,34 @@ def criterion2(ctrl, results, samples_path):
                 sample_lines.append(
                     f"- [{fx['name']}] ({r['reason']}) `{norm(r['src'])[:90]}`"
                     f"\n  → `{norm(r['tgt'])[:90]}`")
+
+    # 반복 붕괴 / 문장 누락 — 화면에 실제로 뜬 영어 줄만 본다(뜨지 않은 줄은 사용자가 못 본다).
+    shown_en = [r for fx in fixtures() for r in results[fx["name"]]["rows"]
+                if r["status"] == "shown" and r["src_lang"] == "en"]
+    collapsed, dropped, collapse_err = collapse_and_dropout(shown_en)
+    if collapsed:
+        sample_lines += ["", "## 반복 붕괴 (기준 2 확정 오역)", ""]
+        for c in collapsed:
+            sample_lines.append(f"- (초과반복 {c['excess']:+.3f}) `{norm(c['src'])[:90]}`"
+                                f"\n  → `{norm(c['tgt'])[:90]}`")
+    if dropped:
+        sample_lines += ["", "## 문장 누락 (기준 2 확정 오역)", ""]
+        for d in dropped:
+            sample_lines.append(f"- `{norm(d['sentence'])[:90]}`"
+                                f"\n  → `{norm(d['piece_out'])[:90]}`")
     samples_path.write_text("\n".join(sample_lines), encoding="utf-8")
 
     fp_rate = (normal_hidden / normal_total) if normal_total else None
-    exact_critical = len(ko_misdisplay) + len(pinyin_leak)
+    exact_critical = (len(ko_misdisplay) + len(pinyin_leak)
+                      + len(collapsed) + len(dropped))
     ok = (fp_rate is not None and fp_rate <= 0.01) and exact_critical == 0
     return {
         "pass": bool(ok),
         "measured": (f"오탐(게이트가 숨긴 정상문장) {normal_hidden}/{normal_total}"
                      f" = {fp_rate*100:.1f}%" if normal_total else "정상문장 0개(측정 불가)")
                     + f" · 확정 오역 {exact_critical}건"
+                    + f"(반복붕괴 {len(collapsed)}/문장누락 {len(dropped)}"
+                    + f"/한국어오표시 {len(ko_misdisplay)}/병음 {len(pinyin_leak)})"
                     + f" · 대리지표 의심 {len(proxy_hits)}건(사람 확인)"
                     + (f" · 병음 오번역이 게이트에 걸려 가려짐 {len(pinyin_gated)}건"
                        if pinyin_gated else "")
@@ -409,14 +474,22 @@ def criterion2(ctrl, results, samples_path):
                    "normal_lines": normal_total, "hidden_by_gate": normal_hidden,
                    "hidden_reasons": dict(hide_reasons),
                    "normal_lines_lost_without_gate": normal_lost,
+                   "repetition_collapse": collapsed,
+                   "sentence_dropout": dropped,
+                   "collapse_measure_error": collapse_err,
+                   "collapse_excess_threshold": COLLAPSE_EXCESS,
+                   "shown_en_lines": len(shown_en),
                    "ko_screen_misdisplay": ko_misdisplay,
                    "pinyin_leak": pinyin_leak,
                    "pinyin_translated_but_gated": pinyin_gated,
                    "unreadable_fixtures": unread,
                    "proxy_suspects": proxy_hits,
                    "per_fixture": per_fixture,
-                   "proxy_note": "치명적 오역은 자동 판정 불가 — 위 proxy 는 대리 지표이고 "
-                                 "표본은 bench/last_samples.md 에 있다."}}
+                   "proxy_note": "반복 붕괴·문장 누락·한국어 오표시·병음 누수는 **정확히** 센다"
+                                 "(repetition_collapse / sentence_dropout). "
+                                 "뜻이 뒤집혔는지(오역 일반)는 여전히 자동 판정 불가라 "
+                                 "proxy_suspects 는 대리 지표이고 표본은 "
+                                 "bench/last_samples.md 에 있다."}}
 
 
 # --- 기준 3: 문단 경계 --------------------------------------------------------
